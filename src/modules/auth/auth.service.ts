@@ -11,7 +11,7 @@ function signToken(id: string, role: string, email: string): string {
 }
 
 export const authService = {
-  async signIn(email: string, password: string): Promise<{ user: User; accessToken: string; refreshToken: string }> {
+  async signIn(email: string, password: string): Promise<{ user: User; accessToken: string }> {
     const row = await queryOne<Record<string, unknown>>(
       'SELECT * FROM profiles WHERE email = $1 LIMIT 1',
       [email.toLowerCase().trim()],
@@ -24,7 +24,7 @@ export const authService = {
     const user = mapProfile(row);
     const accessToken = signToken(user.id, user.role, user.email);
 
-    return { user, accessToken, refreshToken: '' };
+    return { accessToken, user };
   },
 
   async signUp(opts: {
