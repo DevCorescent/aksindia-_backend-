@@ -44,19 +44,58 @@ export const serviceOrdersService = {
     return mapServiceOrder(row);
   },
 
-  async update(id: string, patch: Partial<ServiceOrder>): Promise<ServiceOrder> {
-    const fields: string[] = [];
-    const values: unknown[] = [];
-    let i = 1;
-    if (patch.status !== undefined) { fields.push(`status = $${i++}`); values.push(patch.status); }
-    if (patch.notes  !== undefined) { fields.push(`notes = $${i++}`);  values.push(patch.notes); }
-    if (fields.length === 0) return this.getById(id);
-    values.push(id);
-    const row = await queryOne(
-      `UPDATE service_orders SET ${fields.join(', ')} WHERE id = $${i} RETURNING *`,
-      values,
-    );
-    if (!row) throw new Error('Service order not found');
-    return mapServiceOrder(row);
-  },
+async update(id: string, patch: Partial<ServiceOrder>): Promise<ServiceOrder> {
+  const VALID_STATUSES = [
+    'pending',
+    'confirmed',
+    'in_progress',
+    'completed',
+    'cancelled',
+  ];
+
+  // Validate status if provided
+  if (
+    patch.status !== undefined &&
+    !VALID_STATUSES.includes(patch.status)
+  ) {
+    throw new Error('Invalid service order status');
+  }
+
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  let i = 1;
+
+  // Update status
+  if (patch.status !== undefined) {
+    fields.push(`status = $${i++}`);
+    values.push(patch.status);
+  }
+
+  // Update notes
+  if (patch.notes !== undefined) {
+    fields.push(`notes = $${i++}`);
+    values.push(patch.notes);
+  }
+
+  // Nothing to update
+  if (fields.length === 0) {
+    return this.getById(id);
+  }
+
+  values.push(id);
+
+  const row = await queryOne(
+    `UPDATE service_orders
+     SET ${fields.join(', ')}
+     WHERE id = $${i}
+     RETURNING *`,
+    values,
+  );
+
+  if (!row) {
+    throw new Error('Service order not found');
+  }
+
+  return mapServiceOrder(row);
+},
 };
