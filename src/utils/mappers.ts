@@ -208,7 +208,7 @@ export function mapAgent(row: any): Agent {
     totalSales:     Number(row.total_sales),
     activatedAt:    row.activated_at ?? undefined,
     activatedBy:    row.activated_by ?? undefined,
-    createdAt:      row.created_at?.slice(0, 10),
+    createdAt:      toDateStr(row.created_at),
   };
 }
 
