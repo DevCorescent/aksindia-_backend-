@@ -19,13 +19,28 @@ import notificationsRoutes   from './modules/notifications/notifications.routes'
 import homepageRoutes        from './modules/homepage/homepage.routes';
 import analyticsRoutes       from './modules/analytics/analytics.routes';
 import adminRoutes           from './modules/admin/admin.routes';
+import paymentsRoutes        from './modules/payments/payments.routes';
+import searchRoutes          from './modules/search/search.routes';
+import uploadRoutes          from './modules/upload/upload.routes';
 
 const app = express();
 
 app.use(helmet());
-app.use(cors({ origin: env.frontendUrl, credentials: true }));
+app.use(cors({
+  origin(origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, Postman) and all origins in dev
+    if (!origin || env.nodeEnv !== 'production') { callback(null, true); return; }
+    if (env.frontendUrls.includes(origin)) { callback(null, true); return; }
+    callback(new Error(`CORS: origin ${origin} not allowed`));
+  },
+  credentials: true,
+}));
+
+// Raw body needed for Razorpay webhook signature verification — must come before express.json()
+app.use('/api/v1/payments/webhook', express.raw({ type: 'application/json' }));
 app.use(morgan(env.nodeEnv === 'production' ? 'combined' : 'dev'));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 500, standardHeaders: true, legacyHeaders: false }));
 
@@ -45,6 +60,9 @@ app.use(`${v1}/notifications`,  notificationsRoutes);
 app.use(`${v1}/homepage`,       homepageRoutes);
 app.use(`${v1}/analytics`,      analyticsRoutes);
 app.use(`${v1}/admin`,          adminRoutes);
+app.use(`${v1}/payments`,       paymentsRoutes);
+app.use(`${v1}/search`,         searchRoutes);
+app.use(`${v1}/upload`,         uploadRoutes);
 
 app.use(errorHandler);
 

@@ -338,6 +338,15 @@ CREATE TABLE IF NOT EXISTS public.homepage_config (
 );
 INSERT INTO public.homepage_config (id) VALUES (1) ON CONFLICT DO NOTHING;
 
+-- ── refresh_tokens ───────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.refresh_tokens (
+  id         UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id    UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  token      TEXT        NOT NULL UNIQUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON public.refresh_tokens(user_id);
+
 -- ── custom_roles ──────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.custom_roles (
   id          UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),

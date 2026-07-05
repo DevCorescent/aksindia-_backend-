@@ -32,3 +32,31 @@ export async function execute(sql: string, params?: unknown[]): Promise<number> 
   const { rowCount } = await pool.query(sql, params);
   return rowCount ?? 0;
 }
+
+export interface PaginatedResult<T> {
+  data: T[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export async function queryPaginated<T = Record<string, unknown>>(
+  baseSql: string,
+  params: unknown[],
+  page: number,
+  limit: number,
+): Promise<PaginatedResult<T>> {
+  const offset = (page - 1) * limit;
+
+  // Count query — wrap the base SQL
+  const countSql = `SELECT COUNT(*) AS total FROM (${baseSql}) AS _count_query`;
+  const countRow = await queryOne<{ total: string }>(countSql, params);
+  const total = Number(countRow?.total ?? 0);
+
+  // Data query with pagination appended
+  const dataSql = `${baseSql} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+  const rows = await query<T>(dataSql, [...params, limit, offset]);
+
+  return { data: rows, total, page, limit, totalPages: Math.ceil(total / limit) };
+}
