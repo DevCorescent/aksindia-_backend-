@@ -16,8 +16,12 @@ function rowToAgent(row: Record<string, unknown>): Agent {
 }
 
 export const agentsService = {
-  async list(): Promise<Agent[]> {
-    const rows = await query(`${AGENT_JOIN} ORDER BY a.created_at DESC`);
+  async list(statusFilter?: string): Promise<Agent[]> {
+    const params: unknown[] = [];
+    let sql = AGENT_JOIN;
+    if (statusFilter) sql += ` WHERE a.status = $${params.push(statusFilter)}`;
+    sql += ' ORDER BY a.created_at DESC';
+    const rows = await query(sql, params);
     return rows.map(r => rowToAgent(r as Record<string, unknown>));
   },
 
@@ -36,8 +40,62 @@ export const agentsService = {
   async create(agentId: string, payload: { agentCode: string; commissionRate: number; status: Agent['status'] }): Promise<void> {
     await execute(
       'INSERT INTO agents (id, agent_code, commission_rate, status) VALUES ($1, $2, $3, $4)',
-      [agentId, payload.agentCode, payload.commissionRate, payload.status],
+      [agentId, payload.agentCode, payload.commissionRate, payload.status ?? 'pending'],
     );
+  },
+
+  async approve(id: string, adminId: string): Promise<Agent> {
+    await execute(
+      "UPDATE agents SET status = 'active', activated_at = NOW(), activated_by = $1, updated_at = NOW() WHERE id = $2",
+      [adminId, id],
+    );
+    const agent = await this.getById(id);
+    await execute(
+      "INSERT INTO notifications (user_id, type, title, message) VALUES ($1, 'system', 'Agent Approved', 'Congratulations! Your agent application has been approved. You can now start earning commissions.')",
+      [id],
+    );
+    return agent;
+  },
+
+  async reject(id: string): Promise<Agent> {
+    await execute(
+      "UPDATE agents SET status = 'rejected', updated_at = NOW() WHERE id = $1",
+      [id],
+    );
+    const agent = await this.getById(id);
+    await execute(
+      "INSERT INTO notifications (user_id, type, title, message) VALUES ($1, 'system', 'Agent Application Update', 'Your agent application was not approved at this time.')",
+      [id],
+    );
+    return agent;
+  },
+
+  async getEarnings(id: string) {
+    const [agent, wallet] = await Promise.all([
+      this.getById(id),
+      queryOne('SELECT * FROM wallets WHERE user_id = $1', [id]),
+    ]);
+    if (!wallet) throw new Error('Wallet not found');
+    const walletRow = wallet as Record<string, unknown>;
+    const transactions = await query(
+      'SELECT * FROM wallet_transactions WHERE wallet_id = $1 ORDER BY created_at DESC LIMIT 100',
+      [walletRow.id],
+    );
+    const referredOrders = await query(
+      "SELECT id, customer_name, total, agent_commission, status, created_at FROM orders WHERE agent_id = $1 ORDER BY created_at DESC LIMIT 50",
+      [id],
+    );
+    return {
+      agent,
+      wallet: {
+        balance:     Number(walletRow.balance),
+        pending:     Number(walletRow.pending),
+        totalEarned: Number(walletRow.total_earned),
+        withdrawn:   Number(walletRow.withdrawn),
+      },
+      transactions,
+      referredOrders,
+    };
   },
 
   async update(id: string, patch: Partial<Agent>): Promise<Agent> {

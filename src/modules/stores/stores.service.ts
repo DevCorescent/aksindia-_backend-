@@ -3,8 +3,20 @@ import type { Store } from '../../types';
 import { mapStore } from '../../utils/mappers';
 
 export const storesService = {
-  async list(): Promise<Store[]> {
-    const rows = await query('SELECT * FROM stores ORDER BY created_at DESC');
+  async list(statusFilter?: string): Promise<Store[]> {
+    const params: unknown[] = [];
+    let sql = 'SELECT * FROM stores';
+    if (statusFilter) { sql += ` WHERE status = $${params.push(statusFilter)}`; }
+    sql += ' ORDER BY created_at DESC';
+    const rows = await query(sql, params);
+    return rows.map(mapStore);
+  },
+
+  async listPublic(city?: string): Promise<Store[]> {
+    const params: unknown[] = [];
+    const where = [`status = 'active'`];
+    if (city) where.push(`city = $${params.push(city)}`);
+    const rows = await query(`SELECT * FROM stores WHERE ${where.join(' AND ')} ORDER BY total_sales DESC`, params);
     return rows.map(mapStore);
   },
 
@@ -20,6 +32,13 @@ export const storesService = {
     return mapStore(row);
   },
 
+  async getStoreProducts(storeId: string) {
+    return query(
+      "SELECT * FROM products WHERE store_id = $1 AND status = 'active' ORDER BY featured DESC, created_at DESC",
+      [storeId],
+    );
+  },
+
   async create(payload: Omit<Store, 'id' | 'createdAt' | 'totalSales' | 'totalOrders' | 'walletBalance'>): Promise<Store> {
     const row = await queryOne(
       `INSERT INTO stores
@@ -31,7 +50,7 @@ export const storesService = {
       [
         payload.ownerId, payload.ownerName, payload.name, payload.slug, payload.tagline,
         payload.description ?? '', payload.logo, payload.themeColor, payload.city, payload.state,
-        payload.storeType, payload.status, payload.commissionRate, payload.subdomain,
+        payload.storeType, payload.status ?? 'pending', payload.commissionRate, payload.subdomain,
         payload.contactEmail ?? null, payload.contactPhone ?? null, payload.gstNumber ?? null,
         JSON.stringify(payload.invoiceSettings ?? {}),
       ],
@@ -40,6 +59,38 @@ export const storesService = {
     const storeId = (row as Record<string, unknown>).id as string;
     await execute('UPDATE profiles SET store_id = $1 WHERE id = $2', [storeId, payload.ownerId]);
     return mapStore(row);
+  },
+
+  async activate(id: string, adminId: string): Promise<Store> {
+    const row = await queryOne(
+      `UPDATE stores
+         SET status = 'active', activated_at = NOW(), activated_by = $1,
+             rejected_at = NULL, rejection_reason = NULL, updated_at = NOW()
+       WHERE id = $2 RETURNING *`,
+      [adminId, id],
+    );
+    if (!row) throw new Error('Store not found');
+    return mapStore(row);
+  },
+
+  async reject(id: string, reason: string, adminId: string): Promise<Store> {
+    const row = await queryOne(
+      `UPDATE stores
+         SET status = 'rejected', rejected_at = NOW(), rejection_reason = $1,
+             activated_at = NULL, activated_by = NULL, updated_at = NOW()
+       WHERE id = $2 RETURNING *`,
+      [reason, id],
+    );
+    if (!row) throw new Error('Store not found');
+
+    // Notify owner
+    const store = mapStore(row);
+    await execute(
+      "INSERT INTO notifications (user_id, type, title, message) VALUES ($1, 'system', 'Store Application Update', $2)",
+      [store.ownerId, `Your store "${store.name}" application was rejected. Reason: ${reason}`],
+    );
+
+    return store;
   },
 
   async update(id: string, patch: Partial<Store>): Promise<Store> {
