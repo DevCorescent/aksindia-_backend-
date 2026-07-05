@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "seed": "ts-node -e \"require('dotenv/config')\" src/db/seed.ts"
   },
   "dependencies": {
     "@types/multer": "^2.2.0",
