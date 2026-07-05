@@ -7,10 +7,20 @@ export const notificationsController = {
     try { ok(res, await notificationsService.list(req.user!.id)); }
     catch (e) { serverError(res, (e as Error).message); }
   },
+  async countUnread(req: Request, res: Response): Promise<void> {
+    try { ok(res, { count: await notificationsService.countUnread(req.user!.id) }); }
+    catch (e) { serverError(res, (e as Error).message); }
+  },
   async create(req: Request, res: Response): Promise<void> {
     try {
       await notificationsService.create(req.body.userId, req.body);
       created(res, { message: 'Notification sent' });
+    } catch (e) { serverError(res, (e as Error).message); }
+  },
+  async broadcast(req: Request, res: Response): Promise<void> {
+    try {
+      await notificationsService.broadcast(req.body);
+      created(res, { message: 'Broadcast sent to all users' });
     } catch (e) { serverError(res, (e as Error).message); }
   },
   async markRead(req: Request, res: Response): Promise<void> {

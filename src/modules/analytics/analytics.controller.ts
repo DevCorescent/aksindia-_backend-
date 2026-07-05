@@ -17,4 +17,20 @@ export const analyticsController = {
       created(res, { message: 'Tracked' });
     } catch (e) { serverError(res, (e as Error).message); }
   },
+  async revenueTrend(req: Request, res: Response): Promise<void> {
+    try {
+      const days = Number(req.query.days) || 30;
+      ok(res, await analyticsService.getRevenueTrend(days));
+    } catch (e) { serverError(res, (e as Error).message); }
+  },
+  async topProducts(req: Request, res: Response): Promise<void> {
+    try {
+      const limit = Number(req.query.limit) || 10;
+      ok(res, await analyticsService.getTopProducts(limit));
+    } catch (e) { serverError(res, (e as Error).message); }
+  },
+  async eventSummary(_req: Request, res: Response): Promise<void> {
+    try { ok(res, await analyticsService.getEventSummary()); }
+    catch (e) { serverError(res, (e as Error).message); }
+  },
 };

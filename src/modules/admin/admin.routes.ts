@@ -7,6 +7,7 @@ const router = Router();
 
 const adminOnly = [authenticate, requireRole('admin')];
 
+router.get('/stats',          ...adminOnly, adminController.dashboardStats);
 router.get('/users',          ...adminOnly, adminController.listUsers);
 router.patch('/users/:id',    ...adminOnly, adminController.updateUser);
 router.delete('/users/:id',   ...adminOnly, adminController.deleteUser);

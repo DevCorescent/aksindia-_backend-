@@ -24,4 +24,52 @@ export const analyticsService = {
       ],
     );
   },
+
+  async getRevenueTrend(days = 30): Promise<{ date: string; revenue: number; orders: number }[]> {
+    const rows = await query<{ date: string; revenue: string; orders: string }>(
+      `SELECT
+         DATE(created_at)::text AS date,
+         COALESCE(SUM(total), 0)::numeric AS revenue,
+         COUNT(*)::int AS orders
+       FROM orders
+       WHERE payment_status = 'paid'
+         AND created_at >= NOW() - ($1 || ' days')::INTERVAL
+       GROUP BY DATE(created_at)
+       ORDER BY date ASC`,
+      [String(days)],
+    );
+    return rows.map(r => ({ date: r.date, revenue: Number(r.revenue), orders: Number(r.orders) }));
+  },
+
+  async getTopProducts(limit = 10): Promise<{ productId: string; name: string; totalSold: number; revenue: number }[]> {
+    const rows = await query<{ product_id: string; name: string; total_sold: string; revenue: string }>(
+      `SELECT
+         p.id AS product_id,
+         p.name,
+         p.sold AS total_sold,
+         (p.price * p.sold)::numeric AS revenue
+       FROM products p
+       WHERE p.status = 'active'
+       ORDER BY p.sold DESC
+       LIMIT $1`,
+      [String(limit)],
+    );
+    return rows.map(r => ({
+      productId: r.product_id,
+      name:      r.name,
+      totalSold: Number(r.total_sold),
+      revenue:   Number(r.revenue),
+    }));
+  },
+
+  async getEventSummary(): Promise<{ event: string; count: number }[]> {
+    const rows = await query<{ event: string; count: string }>(
+      `SELECT event, COUNT(*)::int AS count
+       FROM user_activities
+       WHERE created_at >= NOW() - INTERVAL '30 days'
+       GROUP BY event
+       ORDER BY count DESC`,
+    );
+    return rows.map(r => ({ event: r.event, count: Number(r.count) }));
+  },
 };
