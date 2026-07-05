@@ -35,4 +35,8 @@ export const adminController = {
     try { ok(res, await adminService.getRevenueSummary()); }
     catch (e) { serverError(res, (e as Error).message); }
   },
+  async dashboardStats(_req: Request, res: Response): Promise<void> {
+    try { ok(res, await adminService.getDashboardStats()); }
+    catch (e) { serverError(res, (e as Error).message); }
+  },
 };

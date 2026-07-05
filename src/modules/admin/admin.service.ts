@@ -73,4 +73,88 @@ export const adminService = {
     ]);
     return { orders, serviceOrders };
   },
+
+  async getDashboardStats() {
+    const [
+      userCounts,
+      storeStats,
+      productCount,
+      serviceCount,
+      orderStats,
+      serviceOrderStats,
+      agentCount,
+      pendingWithdrawals,
+      recentOrders,
+    ] = await Promise.all([
+      query<{ role: string; count: string }>(
+        'SELECT role, COUNT(*)::int AS count FROM profiles GROUP BY role',
+      ),
+      query<{ status: string; count: string }>(
+        'SELECT status, COUNT(*)::int AS count FROM stores GROUP BY status',
+      ),
+      query<{ count: string }>("SELECT COUNT(*)::int AS count FROM products WHERE status = 'active'"),
+      query<{ count: string }>("SELECT COUNT(*)::int AS count FROM services WHERE status = 'active'"),
+      query<{ status: string; count: string; total: string }>(
+        'SELECT status, COUNT(*)::int AS count, COALESCE(SUM(total),0)::numeric AS total FROM orders GROUP BY status',
+      ),
+      query<{ count: string; amount: string }>(
+        'SELECT COUNT(*)::int AS count, COALESCE(SUM(amount),0)::numeric AS amount FROM service_orders',
+      ),
+      query<{ count: string }>("SELECT COUNT(*)::int AS count FROM agents WHERE status = 'active'"),
+      query<{ count: string; amount: string }>(
+        "SELECT COUNT(*)::int AS count, COALESCE(SUM(amount),0)::numeric AS amount FROM withdrawal_requests WHERE status = 'pending'",
+      ),
+      query(
+        'SELECT id, customer_name, store_name, total, status, created_at FROM orders ORDER BY created_at DESC LIMIT 5',
+      ),
+    ]);
+
+    const roleMap: Record<string, number> = {};
+    for (const r of userCounts) roleMap[r.role] = Number(r.count);
+
+    const storeMap: Record<string, number> = {};
+    for (const s of storeStats) storeMap[s.status] = Number(s.count);
+
+    const orderMap: Record<string, { count: number; total: number }> = {};
+    for (const o of orderStats) orderMap[o.status] = { count: Number(o.count), total: Number(o.total) };
+
+    return {
+      users: {
+        total:            Object.values(roleMap).reduce((a, b) => a + b, 0),
+        customers:        roleMap['customer']          ?? 0,
+        storeOwners:      roleMap['store_owner']       ?? 0,
+        serviceProviders: roleMap['service_provider']  ?? 0,
+        agents:           roleMap['agent']             ?? 0,
+        admins:           roleMap['admin']             ?? 0,
+      },
+      stores: {
+        total:    Object.values(storeMap).reduce((a, b) => a + b, 0),
+        active:   storeMap['active']   ?? 0,
+        pending:  storeMap['pending']  ?? 0,
+        inactive: storeMap['inactive'] ?? 0,
+      },
+      products:     Number(productCount[0]?.count ?? 0),
+      services:     Number(serviceCount[0]?.count ?? 0),
+      activeAgents: Number(agentCount[0]?.count ?? 0),
+      orders: {
+        total:     Object.values(orderMap).reduce((sum, o) => sum + o.count, 0),
+        pending:   orderMap['pending']    ?? { count: 0, total: 0 },
+        confirmed: orderMap['confirmed']  ?? { count: 0, total: 0 },
+        delivered: orderMap['delivered']  ?? { count: 0, total: 0 },
+        cancelled: orderMap['cancelled']  ?? { count: 0, total: 0 },
+      },
+      serviceOrders: {
+        count:  Number(serviceOrderStats[0]?.count  ?? 0),
+        amount: Number(serviceOrderStats[0]?.amount ?? 0),
+      },
+      revenue: {
+        total: Object.values(orderMap).reduce((sum, o) => sum + o.total, 0),
+      },
+      pendingWithdrawals: {
+        count:  Number(pendingWithdrawals[0]?.count  ?? 0),
+        amount: Number(pendingWithdrawals[0]?.amount ?? 0),
+      },
+      recentOrders,
+    };
+  },
 };

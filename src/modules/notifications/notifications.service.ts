@@ -1,4 +1,4 @@
-import { query, execute } from '../../config/db';
+import { query, queryOne, execute } from '../../config/db';
 import type { Notification } from '../../types';
 import { mapNotification } from '../../utils/mappers';
 
@@ -11,10 +11,26 @@ export const notificationsService = {
     return rows.map(mapNotification);
   },
 
+  async countUnread(userId: string): Promise<number> {
+    const row = await queryOne<{ count: string }>(
+      'SELECT COUNT(*)::int AS count FROM notifications WHERE user_id = $1 AND read = false',
+      [userId],
+    );
+    return Number(row?.count ?? 0);
+  },
+
   async create(userId: string, payload: Omit<Notification, 'id' | 'createdAt' | 'read'>): Promise<void> {
     await execute(
       'INSERT INTO notifications (user_id, type, title, message, link) VALUES ($1,$2,$3,$4,$5)',
       [userId, payload.type, payload.title, payload.message, payload.link ?? null],
+    );
+  },
+
+  async broadcast(payload: Omit<Notification, 'id' | 'createdAt' | 'read' | 'userId'>): Promise<void> {
+    await execute(
+      `INSERT INTO notifications (user_id, type, title, message, link)
+       SELECT id, $1, $2, $3, $4 FROM profiles`,
+      [payload.type, payload.title, payload.message, payload.link ?? null],
     );
   },
 
