@@ -9,8 +9,37 @@ import type { Request, Response } from 'express';
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
+/**
+ * @openapi
+ * tags:
+ *   - name: Upload
+ *     description: Cloudinary image upload signing and direct upload
+ */
+
 // Returns a Cloudinary signed upload params so the frontend can upload directly
 // without going through our server (avoids bandwidth cost)
+/**
+ * @openapi
+ * /upload/sign:
+ *   post:
+ *     tags: [Upload]
+ *     summary: Get signed Cloudinary upload parameters for direct browser upload
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               folder:
+ *                 type: string
+ *                 description: Cloudinary folder (defaults to "askindia")
+ *     responses:
+ *       200: { description: "Signed params (cloudName, apiKey, timestamp, signature, folder)" }
+ *       400: { description: Cloudinary not configured or invalid CLOUDINARY_URL }
+ *       401: { description: Missing/invalid token }
+ *       500: { description: Signing error }
+ */
 router.post('/sign', authenticate, (req: Request, res: Response) => {
   try {
     if (!env.cloudinaryUrl) { badRequest(res, 'Cloudinary not configured'); return; }
@@ -30,6 +59,26 @@ router.post('/sign', authenticate, (req: Request, res: Response) => {
 });
 
 // Optional: direct upload through backend (smaller files only)
+/**
+ * @openapi
+ * /upload/image:
+ *   post:
+ *     tags: [Upload]
+ *     summary: Upload an image through the backend to Cloudinary (max 5MB)
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file: { type: string, format: binary }
+ *     responses:
+ *       200: { description: Uploaded image URL }
+ *       400: { description: "Cloudinary not configured, invalid CLOUDINARY_URL, or no file uploaded" }
+ *       401: { description: Missing/invalid token }
+ *       500: { description: Upload error }
+ */
 router.post('/image', authenticate, upload.single('file'), async (req: Request, res: Response) => {
   try {
     if (!env.cloudinaryUrl) { badRequest(res, 'Cloudinary not configured'); return; }
