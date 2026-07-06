@@ -16,6 +16,10 @@ export const env = {
   frontendUrls:          parseOrigins(process.env.FRONTEND_URLS ?? process.env.FRONTEND_URL ?? 'http://localhost:5173'),
   razorpayWebhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET ?? '',
   cloudinaryUrl:         process.env.CLOUDINARY_URL ?? '',
+  cashfreeAppId:         process.env.CASHFREE_APP_ID ?? '',
+  cashfreeSecretKey:     process.env.CASHFREE_SECRET_KEY ?? '',
+  cashfreeWebhookSecret: process.env.CASHFREE_WEBHOOK_SECRET ?? '',
+  cashfreeEnv:           (process.env.CASHFREE_ENV ?? 'sandbox') as 'sandbox' | 'production',
 };
 
 if (!env.databaseUrl) {

@@ -36,8 +36,9 @@ app.use(cors({
   credentials: true,
 }));
 
-// Raw body needed for Razorpay webhook signature verification — must come before express.json()
-app.use('/api/v1/payments/webhook', express.raw({ type: 'application/json' }));
+// Raw body for webhook signature verification — must come before express.json()
+app.use('/api/v1/payments/webhook',          express.raw({ type: 'application/json' }));
+app.use('/api/v1/payments/cashfree/webhook', express.raw({ type: 'application/json' }));
 app.use(morgan(env.nodeEnv === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));

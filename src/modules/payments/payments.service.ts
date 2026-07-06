@@ -5,6 +5,105 @@ import { ordersService } from '../orders/orders.service';
 import { serviceOrdersService } from '../service-orders/service-orders.service';
 import { mapOrder } from '../../utils/mappers';
 
+// ── Cashfree ─────────────────────────────────────────────────────────────────
+
+interface CashfreeOrderParams {
+  orderId: string;
+  amount: number;
+  customerId: string;
+  customerName: string;
+  customerEmail: string;
+  customerPhone: string;
+  returnUrl: string;
+}
+
+interface CashfreeWebhookEvent {
+  type: string;
+  data: {
+    order: { order_id: string; order_status: string; order_amount: number };
+    payment?: { cf_payment_id: number | string; payment_status: string };
+  };
+  event_time: string;
+}
+
+export const cashfreeService = {
+  async createOrder(params: CashfreeOrderParams): Promise<{ paymentSessionId: string; cfOrderId: string }> {
+    const baseUrl = env.cashfreeEnv === 'production'
+      ? 'https://api.cashfree.com'
+      : 'https://sandbox.cashfree.com';
+
+    const res = await fetch(`${baseUrl}/pg/orders`, {
+      method: 'POST',
+      headers: {
+        'x-client-id':     env.cashfreeAppId,
+        'x-client-secret': env.cashfreeSecretKey,
+        'x-api-version':   '2023-08-01',
+        'Content-Type':    'application/json',
+      },
+      body: JSON.stringify({
+        order_id:      params.orderId,
+        order_amount:  params.amount,
+        order_currency: 'INR',
+        customer_details: {
+          customer_id:    params.customerId.slice(0, 50),
+          customer_name:  params.customerName || 'Customer',
+          customer_email: params.customerEmail || 'noreply@askindia.in',
+          customer_phone: (params.customerPhone || '9999999999').replace(/\D/g, '').slice(-10),
+        },
+        order_meta: {
+          return_url: params.returnUrl,
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Cashfree order creation failed (${res.status}): ${errText}`);
+    }
+
+    const data = await res.json() as { cf_order_id: string; payment_session_id: string };
+    return { paymentSessionId: data.payment_session_id, cfOrderId: data.cf_order_id };
+  },
+
+  verifyWebhook(rawBody: Buffer, timestamp: string, signature: string): boolean {
+    if (!env.cashfreeWebhookSecret) return true;
+    const payload = timestamp + '\n' + rawBody.toString();
+    const expected = createHmac('sha256', env.cashfreeWebhookSecret)
+      .update(payload)
+      .digest('base64');
+    return expected === signature;
+  },
+
+  async handleWebhook(event: CashfreeWebhookEvent): Promise<{ processed: boolean; message: string }> {
+    const { type, data } = event;
+    const orderId = data.order?.order_id;
+
+    if (!orderId) return { processed: false, message: 'No order_id in webhook payload' };
+
+    if (type === 'PAYMENT_SUCCESS_WEBHOOK') {
+      await execute(
+        "UPDATE orders SET payment_status = 'paid', payment_method = 'cashfree' WHERE id = $1 AND payment_status != 'paid'",
+        [orderId],
+      );
+      const row = await queryOne('SELECT status FROM orders WHERE id = $1', [orderId]);
+      if (row && (row as Record<string, unknown>).status === 'delivered') {
+        await ordersService.update(orderId, { paymentStatus: 'paid' });
+      }
+      return { processed: true, message: `Order ${orderId} marked paid via Cashfree` };
+    }
+
+    if (type === 'PAYMENT_FAILED_WEBHOOK' || type === 'PAYMENT_USER_DROPPED_WEBHOOK') {
+      await execute(
+        "UPDATE orders SET payment_status = 'failed' WHERE id = $1 AND payment_status = 'pending'",
+        [orderId],
+      );
+      return { processed: true, message: `Order ${orderId} payment failure recorded` };
+    }
+
+    return { processed: false, message: `Event type ${type} not handled` };
+  },
+};
+
 export function verifyRazorpaySignature(rawBody: Buffer, signature: string): boolean {
   if (!env.razorpayWebhookSecret) return true; // skip in dev if secret not set
   const expected = createHmac('sha256', env.razorpayWebhookSecret)

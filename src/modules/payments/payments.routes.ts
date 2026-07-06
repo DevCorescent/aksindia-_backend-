@@ -4,8 +4,12 @@ import { authenticate } from '../../middleware/auth';
 
 const router = Router();
 
-// Raw body middleware is applied in app.ts specifically for this route
+// Razorpay — raw body applied in app.ts
 router.post('/webhook',              paymentsController.webhook);
 router.get('/intent/:orderId',       authenticate, paymentsController.getOrderIntent);
+
+// Cashfree — raw body for webhook applied in app.ts
+router.post('/cashfree/order',       authenticate, paymentsController.cashfreeCreateOrder);
+router.post('/cashfree/webhook',     paymentsController.cashfreeWebhook);
 
 export default router;
