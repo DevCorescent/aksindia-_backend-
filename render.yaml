@@ -7,3 +7,22 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+
+  - type: cron
+    name: askindia-backend-keepalive
+    runtime: node
+    schedule: "*/14 * * * *"
+    buildCommand: ""
+    startCommand: >-
+      node -e "
+        fetch(process.env.BACKEND_URL + '/health')
+          .then(r => r.json())
+          .then(d => console.log('[keepalive] ok -', d.status))
+          .catch(e => { console.error('[keepalive] failed -', e.message); process.exit(1); })
+      "
+    envVars:
+      - key: BACKEND_URL
+        fromService:
+          type: web
+          name: askindia-backend
+          property: host
