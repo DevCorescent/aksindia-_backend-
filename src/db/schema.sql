@@ -358,6 +358,19 @@ CREATE TABLE IF NOT EXISTS public.custom_roles (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- ── reviews ──────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS public.reviews (
+  id          UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  order_id    TEXT        NOT NULL,
+  product_id  UUID        NOT NULL REFERENCES public.products(id) ON DELETE CASCADE,
+  customer_id UUID        NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  store_id    UUID        REFERENCES public.stores(id) ON DELETE CASCADE,
+  rating      INTEGER     NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  review_text TEXT        NOT NULL DEFAULT '',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(order_id, product_id)
+);
+
 -- ════════════════════════════════════════════════════════════════════════════
 --  INDEXES
 -- ════════════════════════════════════════════════════════════════════════════
@@ -376,6 +389,9 @@ CREATE INDEX IF NOT EXISTS idx_notifications_user  ON public.notifications(user_
 CREATE INDEX IF NOT EXISTS idx_activities_user     ON public.user_activities(user_id);
 CREATE INDEX IF NOT EXISTS idx_activities_event    ON public.user_activities(event);
 CREATE INDEX IF NOT EXISTS idx_wallet_txn_wallet   ON public.wallet_transactions(wallet_id);
+CREATE INDEX IF NOT EXISTS idx_reviews_product     ON public.reviews(product_id);
+CREATE INDEX IF NOT EXISTS idx_reviews_store       ON public.reviews(store_id);
+CREATE INDEX IF NOT EXISTS idx_reviews_customer    ON public.reviews(customer_id);
 
 -- ════════════════════════════════════════════════════════════════════════════
 --  TRIGGERS — auto-update updated_at
