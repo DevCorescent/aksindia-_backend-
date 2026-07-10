@@ -3,10 +3,13 @@ import type { Store } from '../../types';
 import { mapStore } from '../../utils/mappers';
 
 export const storesService = {
-  async list(statusFilter?: string): Promise<Store[]> {
+  async list(statusFilter?: string, ownerId?: string): Promise<Store[]> {
     const params: unknown[] = [];
+    const where: string[] = [];
+    if (statusFilter) where.push(`status = $${params.push(statusFilter)}`);
+    if (ownerId)      where.push(`owner_id = $${params.push(ownerId)}`);
     let sql = 'SELECT * FROM stores';
-    if (statusFilter) { sql += ` WHERE status = $${params.push(statusFilter)}`; }
+    if (where.length) sql += ' WHERE ' + where.join(' AND ');
     sql += ' ORDER BY created_at DESC';
     const rows = await query(sql, params);
     return rows.map(mapStore);
