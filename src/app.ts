@@ -24,6 +24,7 @@ import adminRoutes from "./modules/admin/admin.routes";
 import paymentsRoutes from "./modules/payments/payments.routes";
 import searchRoutes from "./modules/search/search.routes";
 import uploadRoutes from "./modules/upload/upload.routes";
+import reviewsRoutes from "./modules/reviews/reviews.routes";
 
 const app = express();
 
@@ -83,6 +84,7 @@ app.use(`${v1}/admin`, adminRoutes);
 app.use(`${v1}/payments`, paymentsRoutes);
 app.use(`${v1}/search`, searchRoutes);
 app.use(`${v1}/upload`, uploadRoutes);
+app.use(`${v1}/reviews`, reviewsRoutes);
 
 app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get("/api/docs.json", (_req, res) => res.json(swaggerSpec)); // raw spec
