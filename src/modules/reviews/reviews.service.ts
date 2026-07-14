@@ -26,7 +26,39 @@ function mapReview(row: Record<string, unknown>): Review {
   };
 }
 
+export type ReviewableCheck =
+  | { ok: true; storeId?: string }
+  | { ok: false; status: 400 | 403 | 404; error: string };
+
 export const reviewsService = {
+  /**
+   * A customer may only review a product they actually bought, on an order of
+   * their own, once it has been delivered. Returns the order's store so the
+   * caller does not have to trust a client-supplied storeId.
+   */
+  async checkReviewable(orderId: string, productId: string, customerId: string): Promise<ReviewableCheck> {
+    const row = await queryOne(
+      `SELECT customer_id, store_id, status, items FROM orders WHERE id = $1`,
+      [orderId],
+    );
+    if (!row) return { ok: false, status: 404, error: 'Order not found' };
+
+    const order = row as Record<string, unknown>;
+    if (String(order.customer_id) !== customerId) {
+      return { ok: false, status: 403, error: 'This order does not belong to you' };
+    }
+    if (String(order.status) !== 'delivered') {
+      return { ok: false, status: 400, error: 'Only delivered orders can be reviewed' };
+    }
+
+    const items = (order.items ?? []) as { productId?: string }[];
+    if (!items.some(i => String(i.productId) === productId)) {
+      return { ok: false, status: 400, error: 'That product is not part of this order' };
+    }
+
+    return { ok: true, storeId: order.store_id ? String(order.store_id) : undefined };
+  },
+
   async create(payload: Omit<Review, 'id' | 'createdAt'>): Promise<Review> {
     const row = await queryOne(
       `INSERT INTO reviews (order_id, product_id, customer_id, store_id, rating, review_text)
@@ -69,6 +101,14 @@ export const reviewsService = {
     const rows = await query(
       `SELECT * FROM reviews WHERE order_id = $1`,
       [orderId],
+    );
+    return (rows as Record<string, unknown>[]).map(mapReview);
+  },
+
+  async getByCustomer(customerId: string): Promise<Review[]> {
+    const rows = await query(
+      `SELECT * FROM reviews WHERE customer_id = $1 ORDER BY created_at DESC`,
+      [customerId],
     );
     return (rows as Record<string, unknown>[]).map(mapReview);
   },
