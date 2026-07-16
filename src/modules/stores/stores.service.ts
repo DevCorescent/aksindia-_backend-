@@ -1,6 +1,7 @@
 import { query, queryOne, execute } from '../../config/db';
 import type { Store } from '../../types';
 import { mapStore } from '../../utils/mappers';
+import { invalidateProfileCache } from '../../middleware/auth';
 
 export const storesService = {
   async list(statusFilter?: string, ownerId?: string): Promise<Store[]> {
@@ -61,6 +62,8 @@ export const storesService = {
     if (!row) throw new Error('Create failed');
     const storeId = (row as Record<string, unknown>).id as string;
     await execute('UPDATE profiles SET store_id = $1 WHERE id = $2', [storeId, payload.ownerId]);
+    // Owner's profile now has a store_id — refresh their cached profile.
+    invalidateProfileCache(payload.ownerId);
     return mapStore(row);
   },
 

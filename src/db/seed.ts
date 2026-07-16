@@ -438,8 +438,8 @@ async function run() {
          show_trending_section   = true,
          show_best_deals         = true,
          show_collection_list    = true,
-         newsletter_title        = 'Get 20% Off Your First Order',
-         newsletter_subtitle     = 'Subscribe for exclusive deals, new arrivals & festive offers',
+         newsletter_title        = 'Stay in the Loop',
+         newsletter_subtitle     = 'Subscribe for new arrivals, festive offers & the latest updates',
          updated_at              = NOW()
        WHERE id = 1`,
       [
