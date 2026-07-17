@@ -1,5 +1,6 @@
 import { query, queryOne, execute } from '../../config/db';
 import { mapProfile } from '../../utils/mappers';
+import { invalidateProfileCache } from '../../middleware/auth';
 import type { User } from '../../types';
 
 export const adminService = {
@@ -24,11 +25,14 @@ export const adminService = {
       values,
     );
     if (!row) throw new Error('User not found');
+    // Role / suspension / details changed — drop the cached profile immediately.
+    invalidateProfileCache(userId);
     return mapProfile(row);
   },
 
   async deleteUser(userId: string): Promise<void> {
     await execute('DELETE FROM profiles WHERE id = $1', [userId]);
+    invalidateProfileCache(userId);
   },
 
   async listCustomRoles() {

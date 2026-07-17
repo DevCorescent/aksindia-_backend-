@@ -4,7 +4,10 @@ import { ok, created, badRequest, serverError } from '../../utils/response';
 
 export const storesController = {
   async list(req: Request, res: Response): Promise<void> {
-    try { ok(res, await storesService.list(req.query.status as string | undefined)); }
+    try {
+      const ownerId = req.user!.role === 'store_owner' ? req.user!.id : undefined;
+      ok(res, await storesService.list(req.query.status as string | undefined, ownerId));
+    }
     catch (e) { serverError(res, (e as Error).message); }
   },
 

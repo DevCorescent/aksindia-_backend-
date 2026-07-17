@@ -5,6 +5,7 @@ import { query, queryOne, execute } from '../../config/db';
 import { env } from '../../config/env';
 import type { User, UserRole } from '../../types';
 import { mapProfile } from '../../utils/mappers';
+import { invalidateProfileCache } from '../../middleware/auth';
 
 function signAccess(id: string, role: string, email: string): string {
   return jwt.sign({ id, role, email }, env.jwtSecret, { expiresIn: env.jwtExpiresIn } as jwt.SignOptions);
@@ -137,6 +138,7 @@ export const authService = {
     if (fields.length === 0) return;
     values.push(userId);
     await execute(`UPDATE profiles SET ${fields.join(', ')}, updated_at = NOW() WHERE id = $${idx}`, values);
+    invalidateProfileCache(userId);
   },
 
   async listSessions(userId: string): Promise<{ id: string; createdAt: string }[]> {

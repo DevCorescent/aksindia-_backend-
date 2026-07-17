@@ -1,12 +1,16 @@
 import { query, queryOne, execute } from '../../config/db';
 import type { Store } from '../../types';
 import { mapStore } from '../../utils/mappers';
+import { invalidateProfileCache } from '../../middleware/auth';
 
 export const storesService = {
-  async list(statusFilter?: string): Promise<Store[]> {
+  async list(statusFilter?: string, ownerId?: string): Promise<Store[]> {
     const params: unknown[] = [];
+    const where: string[] = [];
+    if (statusFilter) where.push(`status = $${params.push(statusFilter)}`);
+    if (ownerId)      where.push(`owner_id = $${params.push(ownerId)}`);
     let sql = 'SELECT * FROM stores';
-    if (statusFilter) { sql += ` WHERE status = $${params.push(statusFilter)}`; }
+    if (where.length) sql += ' WHERE ' + where.join(' AND ');
     sql += ' ORDER BY created_at DESC';
     const rows = await query(sql, params);
     return rows.map(mapStore);
@@ -58,6 +62,8 @@ export const storesService = {
     if (!row) throw new Error('Create failed');
     const storeId = (row as Record<string, unknown>).id as string;
     await execute('UPDATE profiles SET store_id = $1 WHERE id = $2', [storeId, payload.ownerId]);
+    // Owner's profile now has a store_id — refresh their cached profile.
+    invalidateProfileCache(payload.ownerId);
     return mapStore(row);
   },
 
