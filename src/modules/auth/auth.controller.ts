@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import { authService } from './auth.service';
 import { ok, created, badRequest, unauthorized, serverError } from '../../utils/response';
 
-const ALLOWED_ROLES = ['admin', 'store_owner', 'service_provider', 'customer', 'agent'] as const;
+const ALLOWED_ROLES = ['admin', 'store_owner', 'service_provider', 'customer', 'agent', 'delivery_partner'] as const;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export const authController = {

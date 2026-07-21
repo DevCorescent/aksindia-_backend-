@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   email         TEXT        UNIQUE NOT NULL,
   password_hash TEXT        NOT NULL,
   role          TEXT        NOT NULL DEFAULT 'customer'
-                            CHECK (role IN ('admin','store_owner','service_provider','customer','agent')),
+                            CHECK (role IN ('admin','store_owner','service_provider','customer','agent','delivery_partner')),
   phone         TEXT,
   city          TEXT,
   state         TEXT,

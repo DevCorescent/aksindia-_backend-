@@ -39,6 +39,9 @@ export const ordersService = {
     if (role === 'customer'    && userId)  where.push(`customer_id = $${params.push(userId)}`);
     if (role === 'store_owner' && storeId) where.push(`store_id = $${params.push(storeId)}`);
     if (role === 'agent'       && userId)  where.push(`agent_id = $${params.push(userId)}`);
+    // Delivery partners see the fulfilment queue — orders that are ready to ship,
+    // in transit, or already delivered (their work history).
+    if (role === 'delivery_partner')       where.push(`status IN ('processing','shipped','delivered')`);
     const sql = `SELECT * FROM orders${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC`;
     const rows = await query(sql, params);
     return rows.map(mapOrder);

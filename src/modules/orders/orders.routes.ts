@@ -133,7 +133,7 @@ router.post('/',            authenticate, ordersController.create);
  *       403: { description: Not an admin or store_owner }
  *       500: { description: Order not found }
  */
-router.patch('/:id',        authenticate, requireRole('admin', 'store_owner'), ordersController.update);
+router.patch('/:id',        authenticate, requireRole('admin', 'store_owner', 'delivery_partner'), ordersController.update);
 /**
  * @openapi
  * /orders/{id}/cancel:
