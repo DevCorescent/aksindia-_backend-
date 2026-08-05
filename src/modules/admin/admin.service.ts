@@ -1,3 +1,4 @@
+import bcrypt from 'bcryptjs';
 import { query, queryOne, execute } from '../../config/db';
 import { mapProfile } from '../../utils/mappers';
 import { invalidateProfileCache } from '../../middleware/auth';
@@ -32,6 +33,27 @@ export const adminService = {
 
   async deleteUser(userId: string): Promise<void> {
     await execute('DELETE FROM profiles WHERE id = $1', [userId]);
+    invalidateProfileCache(userId);
+  },
+
+  /** Admin-only password override for existing users (Bug 4). */
+  async resetUserPassword(userId: string, newPassword: string): Promise<void> {
+    if (!newPassword || newPassword.length < 6) {
+      throw new Error('Password must be at least 6 characters');
+    }
+    const row = await queryOne<{ id: string }>(
+      'SELECT id FROM profiles WHERE id = $1',
+      [userId],
+    );
+    if (!row) throw new Error('User not found');
+
+    const newHash = await bcrypt.hash(newPassword, 12);
+    await execute(
+      'UPDATE profiles SET password_hash = $1, updated_at = NOW() WHERE id = $2',
+      [newHash, userId],
+    );
+    // Revoke the user's existing sessions — they must sign in with the new password.
+    await execute('DELETE FROM refresh_tokens WHERE user_id = $1', [userId]);
     invalidateProfileCache(userId);
   },
 

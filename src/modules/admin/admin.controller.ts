@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { adminService } from './admin.service';
-import { ok, created, noContent, serverError } from '../../utils/response';
+import { ok, created, badRequest, noContent, serverError } from '../../utils/response';
 
 export const adminController = {
   async listUsers(_req: Request, res: Response): Promise<void> {
@@ -14,6 +14,19 @@ export const adminController = {
   async deleteUser(req: Request, res: Response): Promise<void> {
     try { await adminService.deleteUser(req.params.id); noContent(res); }
     catch (e) { serverError(res, (e as Error).message); }
+  },
+  async resetUserPassword(req: Request, res: Response): Promise<void> {
+    try {
+      const { newPassword } = req.body as { newPassword?: string };
+      if (!newPassword) { badRequest(res, 'newPassword required'); return; }
+      await adminService.resetUserPassword(req.params.id, newPassword);
+      ok(res, { message: 'Password updated. The user must sign in again.' });
+    } catch (e) {
+      const message = (e as Error).message;
+      if (message === 'User not found') { badRequest(res, message); return; }
+      if (message === 'Password must be at least 6 characters') { badRequest(res, message); return; }
+      serverError(res, message);
+    }
   },
   async listRoles(_req: Request, res: Response): Promise<void> {
     try { ok(res, await adminService.listCustomRoles()); }

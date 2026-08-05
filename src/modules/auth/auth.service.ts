@@ -1,11 +1,14 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { randomUUID } from 'crypto';
+import { randomUUID, randomBytes, createHash } from 'crypto';
 import { query, queryOne, execute } from '../../config/db';
 import { env } from '../../config/env';
 import type { User, UserRole } from '../../types';
 import { mapProfile } from '../../utils/mappers';
 import { invalidateProfileCache } from '../../middleware/auth';
+
+// Password-reset tokens expire after one hour.
+const RESET_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 function signAccess(id: string, role: string, email: string): string {
   return jwt.sign({ id, role, email }, env.jwtSecret, { expiresIn: env.jwtExpiresIn } as jwt.SignOptions);
@@ -151,5 +154,64 @@ export const authService = {
 
   async revokeSession(sessionId: string, userId: string): Promise<void> {
     await execute('DELETE FROM refresh_tokens WHERE id = $1 AND user_id = $2', [sessionId, userId]);
+  },
+
+  async forgotPassword(email: string): Promise<{ message: string; devResetLink?: string }> {
+    const normalized = email.toLowerCase().trim();
+    const row = await queryOne<{ id: string }>(
+      'SELECT id FROM profiles WHERE email = $1',
+      [normalized],
+    );
+
+    // Generic response — never reveals whether the email exists.
+    const message = 'If an account exists for that email, a password reset link has been generated.';
+    if (!row) return { message };
+
+    const token     = randomBytes(32).toString('hex');
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS);
+
+    // Only one active reset request at a time per user.
+    await execute('DELETE FROM password_resets WHERE user_id = $1 AND used = false', [row.id]);
+    await execute(
+      'INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
+      [row.id, tokenHash, expiresAt],
+    );
+
+    let devResetLink: string | undefined;
+    if (env.nodeEnv !== 'production') {
+      // Development-only: no SMTP is configured, so hand the link back to the
+      // caller to complete the flow manually. Never returned in production.
+      devResetLink = `${env.frontendUrl}/reset-password?token=${token}`;
+    } else {
+      // Production: an email provider would send the reset link to the user here.
+      console.log(`[auth] password reset requested for ${normalized}`);
+    }
+
+    return { message, ...(devResetLink ? { devResetLink } : {}) };
+  },
+
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    if (!token) throw new Error('Invalid or expired reset token');
+    if (newPassword.length < 6) throw new Error('Password must be at least 6 characters');
+
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+    const row = await queryOne<{ id: string; user_id: string }>(
+      `SELECT id, user_id FROM password_resets
+       WHERE token_hash = $1 AND used = false AND expires_at > NOW()`,
+      [tokenHash],
+    );
+    if (!row) throw new Error('Invalid or expired reset token');
+
+    const newHash = await bcrypt.hash(newPassword, 12);
+    await execute(
+      'UPDATE profiles SET password_hash = $1, updated_at = NOW() WHERE id = $2',
+      [newHash, row.user_id],
+    );
+    // Single-use token — invalidated now.
+    await execute('UPDATE password_resets SET used = true WHERE id = $1', [row.id]);
+    // Revoke all active sessions for the user.
+    await execute('DELETE FROM refresh_tokens WHERE user_id = $1', [row.user_id]);
+    invalidateProfileCache(row.user_id);
   },
 };

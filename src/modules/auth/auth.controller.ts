@@ -95,4 +95,26 @@ export const authController = {
       ok(res, { message: 'Session revoked' });
     } catch (e) { serverError(res, (e as Error).message); }
   },
+
+  async forgotPassword(req: Request, res: Response): Promise<void> {
+    try {
+      const { email } = req.body as { email?: string };
+      if (!email) { badRequest(res, 'email required'); return; }
+      ok(res, await authService.forgotPassword(email));
+    } catch (e) { serverError(res, (e as Error).message); }
+  },
+
+  async resetPassword(req: Request, res: Response): Promise<void> {
+    try {
+      const { token, newPassword } = req.body as { token?: string; newPassword?: string };
+      if (!token || !newPassword) { badRequest(res, 'token and newPassword required'); return; }
+      await authService.resetPassword(token, newPassword);
+      ok(res, { message: 'Password has been reset. You can now sign in with your new password.' });
+    } catch (e) {
+      const message = (e as Error).message;
+      if (message === 'Invalid or expired reset token') { badRequest(res, message); return; }
+      if (message === 'Password must be at least 6 characters') { badRequest(res, message); return; }
+      serverError(res, message);
+    }
+  },
 };

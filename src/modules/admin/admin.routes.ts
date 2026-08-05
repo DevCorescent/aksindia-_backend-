@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { adminController } from './admin.controller';
 import { authenticate } from '../../middleware/auth';
+import { adminController } from './admin.controller';
 import { requireRole } from '../../middleware/requireRole';
 
 const router = Router();
@@ -71,6 +71,35 @@ router.get('/users',          ...adminOnly, adminController.listUsers);
  *       500: { description: User not found or update failed }
  */
 router.patch('/users/:id',    ...adminOnly, adminController.updateUser);
+
+/**
+ * @openapi
+ * /admin/users/{id}/reset-password:
+ *   post:
+ *     tags: [Admin]
+ *     summary: Force-reset user password (admin only)
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *         description: User (profile) id
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [newPassword]
+ *             properties:
+ *               newPassword: { type: string }
+ *     responses:
+ *       200: { description: Password updated }
+ *       400: { description: newPassword required or user not found }
+ *       401: { description: Missing/invalid token }
+ *       403: { description: Not an admin }
+ */
+router.post('/users/:id/reset-password', ...adminOnly, adminController.resetUserPassword);
 
 /**
  * @openapi

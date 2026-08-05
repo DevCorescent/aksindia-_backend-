@@ -65,6 +65,51 @@ router.post('/signup',                    authController.signUp);
 
 /**
  * @openapi
+ * /auth/forgot-password:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Request a password reset link
+ *     description: Generates a time-limited reset token for the account if one exists. Always returns a generic message to avoid revealing whether an email is registered. In development (no SMTP configured) the reset link is returned in the response for manual testing — it is never returned in production.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email]
+ *             properties:
+ *               email: { type: string, format: email }
+ *     responses:
+ *       200: { description: Generic confirmation (may include devResetLink in development) }
+ *       400: { description: email required }
+ */
+router.post('/forgot-password',           authController.forgotPassword);
+
+/**
+ * @openapi
+ * /auth/reset-password:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Reset a password with a reset token
+ *     description: Validates the single-use token, hashes the new password, updates the profile, marks the token used, and revokes the user's active sessions.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [token, newPassword]
+ *             properties:
+ *               token:       { type: string }
+ *               newPassword: { type: string, minLength: 6 }
+ *     responses:
+ *       200: { description: Password reset }
+ *       400: { description: Missing fields or invalid/expired token }
+ */
+router.post('/reset-password',            authController.resetPassword);
+
+/**
+ * @openapi
  * /auth/refresh:
  *   post:
  *     tags: [Auth]
