@@ -15,7 +15,12 @@ function signAccess(id: string, role: string, email: string): string {
 }
 
 function signRefresh(id: string): string {
-  return jwt.sign({ id, type: 'refresh' }, env.jwtSecret, { expiresIn: env.refreshJwtExpiresIn } as jwt.SignOptions);
+  // `jti` makes every issued token unique. Without it the payload was just
+  // { id, type, iat, exp } — and `iat` only has one-second resolution, so two
+  // sign-ins by the same user in the same second produced a byte-identical JWT
+  // that collided with the UNIQUE constraint on refresh_tokens.token, failing
+  // the INSERT and turning the login into a 500.
+  return jwt.sign({ id, type: 'refresh', jti: randomUUID() }, env.jwtSecret, { expiresIn: env.refreshJwtExpiresIn } as jwt.SignOptions);
 }
 
 export const authService = {

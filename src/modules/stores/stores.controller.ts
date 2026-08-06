@@ -34,10 +34,14 @@ export const storesController = {
   async create(req: Request, res: Response): Promise<void> {
     try {
       if (!req.body.name || !req.body.slug) { badRequest(res, 'name and slug required'); return; }
+      // `||` not `??`: the admin create-store form submits ownerId: '' when no
+      // owner is selected, and '' is not nullish — so `??` passed it straight
+      // through to owner_id (UUID NOT NULL) and the insert died with
+      // `invalid input syntax for type uuid: ""`.
       const data = await storesService.create({
         ...req.body,
-        ownerId:   req.body.ownerId   ?? req.user!.id,
-        ownerName: req.body.ownerName ?? req.user!.name,
+        ownerId:   req.body.ownerId   || req.user!.id,
+        ownerName: req.body.ownerName || req.user!.name,
       });
       created(res, data);
     } catch (e) { serverError(res, (e as Error).message); }
