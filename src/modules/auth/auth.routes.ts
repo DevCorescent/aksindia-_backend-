@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authController } from './auth.controller';
 import { authenticate } from '../../middleware/auth';
+import { passwordResetLimiter } from '../../middleware/rateLimiters';
 
 const router = Router();
 
@@ -69,7 +70,7 @@ router.post('/signup',                    authController.signUp);
  *   post:
  *     tags: [Auth]
  *     summary: Request a password reset link
- *     description: Generates a time-limited reset token for the account if one exists. Always returns a generic message to avoid revealing whether an email is registered. In development (no SMTP configured) the reset link is returned in the response for manual testing — it is never returned in production.
+ *     description: Generates a time-limited reset token for the account if one exists. Always returns a generic message to avoid revealing whether an email is registered. `emailSent` reports whether a mail provider is configured (never whether the address matched). When delivery is unavailable the reset link is returned as `devResetLink` outside production for manual testing — never in production. Rate limited to 10 requests per 15 minutes per IP.
  *     requestBody:
  *       required: true
  *       content:
@@ -80,10 +81,11 @@ router.post('/signup',                    authController.signUp);
  *             properties:
  *               email: { type: string, format: email }
  *     responses:
- *       200: { description: Generic confirmation (may include devResetLink in development) }
+ *       200: { description: Generic confirmation with emailSent (may include devResetLink outside production) }
  *       400: { description: email required }
+ *       429: { description: Too many password reset attempts }
  */
-router.post('/forgot-password',           authController.forgotPassword);
+router.post('/forgot-password',           passwordResetLimiter, authController.forgotPassword);
 
 /**
  * @openapi
@@ -106,7 +108,7 @@ router.post('/forgot-password',           authController.forgotPassword);
  *       200: { description: Password reset }
  *       400: { description: Missing fields or invalid/expired token }
  */
-router.post('/reset-password',            authController.resetPassword);
+router.post('/reset-password',            passwordResetLimiter, authController.resetPassword);
 
 /**
  * @openapi

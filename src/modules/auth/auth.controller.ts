@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { authService } from './auth.service';
 import { ok, created, badRequest, unauthorized, serverError } from '../../utils/response';
+import { MIN_PASSWORD_LENGTH, PASSWORD_TOO_SHORT } from '../../config/constants';
 
 const ALLOWED_ROLES = ['admin', 'store_owner', 'service_provider', 'customer', 'agent', 'delivery_partner'] as const;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -21,14 +22,20 @@ export const authController = {
 
   async signUp(req: Request, res: Response): Promise<void> {
     try {
-      const { email, password, name, role, phone, city, state } = req.body as Record<string, string>;
+      const {
+        email, password, name, role, phone, city, state,
+        dateOfBirth, gender, addressLine1, addressLine2, landmark, pinCode,
+      } = req.body as Record<string, string>;
       if (!email || !password || !name || !role) { badRequest(res, 'email, password, name and role required'); return; }
       if (!EMAIL_RE.test(email)) { badRequest(res, 'a valid email is required'); return; }
-      if (password.length < 6) { badRequest(res, 'password must be at least 6 characters'); return; }
+      if (password.length < MIN_PASSWORD_LENGTH) { badRequest(res, PASSWORD_TOO_SHORT); return; }
       if (!ALLOWED_ROLES.includes(role as (typeof ALLOWED_ROLES)[number])) {
         badRequest(res, `role must be one of: ${ALLOWED_ROLES.join(', ')}`); return;
       }
-      const result = await authService.signUp({ email, password, name, role: role as never, phone, city, state });
+      const result = await authService.signUp({
+        email, password, name, role: role as never, phone, city, state,
+        dateOfBirth, gender, addressLine1, addressLine2, landmark, pinCode,
+      });
       created(res, result);
     } catch (e) {
       const message = (e as Error).message;
@@ -113,7 +120,7 @@ export const authController = {
     } catch (e) {
       const message = (e as Error).message;
       if (message === 'Invalid or expired reset token') { badRequest(res, message); return; }
-      if (message === 'Password must be at least 6 characters') { badRequest(res, message); return; }
+      if (message === PASSWORD_TOO_SHORT) { badRequest(res, message); return; }
       serverError(res, message);
     }
   },

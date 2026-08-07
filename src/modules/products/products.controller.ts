@@ -50,6 +50,11 @@ export const productsController = {
   async create(req: Request, res: Response): Promise<void> {
     try {
       if (!req.body.name) { badRequest(res, 'name is required'); return; }
+      // price is the one NOT NULL column with no usable default — reject it here
+      // rather than letting the insert fail as an opaque 500.
+      if (req.body.price === undefined || req.body.price === null || Number.isNaN(Number(req.body.price))) {
+        badRequest(res, 'price is required'); return;
+      }
       const data = await productsService.create({ ...req.body, storeId: req.body.storeId ?? req.user!.storeId });
       created(res, data);
     } catch (e) { serverError(res, (e as Error).message); }

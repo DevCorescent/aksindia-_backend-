@@ -8,6 +8,24 @@ function toDateStr(val: any): string {
   return String(val).slice(0, 10);
 }
 
+/**
+ * For DATE columns (no time, no zone). node-postgres parses those to a Date at
+ * LOCAL midnight, so toISOString() shifts them a day backwards in any positive
+ * offset — in IST a date_of_birth of the 18th came back as the 17th. Format
+ * from the local components instead.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toDateOnlyStr(val: any): string {
+  if (!val) return '';
+  if (val instanceof Date) {
+    const y = val.getFullYear();
+    const m = String(val.getMonth() + 1).padStart(2, '0');
+    const d = String(val.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return String(val).slice(0, 10);
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function toISOStr(val: any): string {
   if (!val) return '';
@@ -27,6 +45,12 @@ export function mapProfile(row: any): User {
     state:     row.state   ?? undefined,
     avatar:    row.avatar_url ?? undefined,
     storeId:   row.store_id  ?? undefined,
+    dateOfBirth:  row.date_of_birth ? toDateOnlyStr(row.date_of_birth) : undefined,
+    gender:       row.gender        ?? undefined,
+    addressLine1: row.address_line1 ?? undefined,
+    addressLine2: row.address_line2 ?? undefined,
+    landmark:     row.landmark      ?? undefined,
+    pinCode:      row.pin_code      ?? undefined,
     createdAt: toDateStr(row.created_at),
   };
 }

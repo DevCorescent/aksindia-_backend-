@@ -44,18 +44,24 @@ export const storesService = {
   },
 
   async create(payload: Omit<Store, 'id' | 'createdAt' | 'totalSales' | 'totalOrders' | 'walletBalance'>): Promise<Store> {
+    // Every NOT NULL column is defaulted here rather than left undefined: an
+    // undefined parameter reaches Postgres as NULL, which overrides the column
+    // default and fails the constraint instead of falling back to it.
     const row = await queryOne(
       `INSERT INTO stores
         (owner_id, owner_name, name, slug, tagline, description, logo, theme_color, city, state,
          store_type, status, commission_rate, subdomain, contact_email, contact_phone,
-         gst_number, invoice_settings)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+         gst_number, bank_account, bank_ifsc, invoice_settings)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
        RETURNING *`,
       [
-        payload.ownerId, payload.ownerName, payload.name, payload.slug, payload.tagline,
-        payload.description ?? '', payload.logo, payload.themeColor, payload.city, payload.state,
-        payload.storeType, payload.status ?? 'pending', payload.commissionRate, payload.subdomain,
+        payload.ownerId, payload.ownerName ?? '', payload.name, payload.slug, payload.tagline ?? '',
+        payload.description ?? '', payload.logo ?? '🏪', payload.themeColor ?? '#0D1F6E',
+        payload.city ?? '', payload.state ?? '',
+        payload.storeType ?? 'product', payload.status ?? 'pending',
+        payload.commissionRate ?? 10, payload.subdomain ?? '',
         payload.contactEmail ?? null, payload.contactPhone ?? null, payload.gstNumber ?? null,
+        payload.bankAccount ?? null, payload.bankIfsc ?? null,
         JSON.stringify(payload.invoiceSettings ?? {}),
       ],
     );

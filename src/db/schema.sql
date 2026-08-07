@@ -28,6 +28,12 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   city          TEXT,
   state         TEXT,
   avatar_url    TEXT,
+  date_of_birth DATE,
+  gender        TEXT,
+  address_line1 TEXT,
+  address_line2 TEXT,
+  landmark      TEXT,
+  pin_code      TEXT,
   store_id      UUID,
   is_active     BOOLEAN     NOT NULL DEFAULT true,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -51,7 +57,7 @@ CREATE TABLE IF NOT EXISTS public.stores (
   store_type        TEXT          NOT NULL DEFAULT 'product'
                                   CHECK (store_type IN ('product','service')),
   status            TEXT          NOT NULL DEFAULT 'pending'
-                                  CHECK (status IN ('active','pending','suspended')),
+                                  CHECK (status IN ('active','pending','suspended','rejected')),
   commission_rate   NUMERIC(5,2)  NOT NULL DEFAULT 10,
   wallet_balance    NUMERIC(12,2) NOT NULL DEFAULT 0,
   total_sales       NUMERIC(12,2) NOT NULL DEFAULT 0,
@@ -154,7 +160,7 @@ CREATE TABLE IF NOT EXISTS public.agents (
   agent_code      TEXT          UNIQUE NOT NULL DEFAULT 'AGT' || LPAD(NEXTVAL('agent_code_seq')::TEXT, 3, '0'),
   commission_rate NUMERIC(5,2)  NOT NULL DEFAULT 10,
   status          TEXT          NOT NULL DEFAULT 'pending'
-                                CHECK (status IN ('active','pending','suspended')),
+                                CHECK (status IN ('active','pending','suspended','rejected')),
   wallet_balance  NUMERIC(12,2) NOT NULL DEFAULT 0,
   total_earned    NUMERIC(12,2) NOT NULL DEFAULT 0,
   total_orders    INTEGER       NOT NULL DEFAULT 0,
@@ -404,6 +410,31 @@ CREATE INDEX IF NOT EXISTS idx_wallet_txn_wallet   ON public.wallet_transactions
 CREATE INDEX IF NOT EXISTS idx_reviews_product     ON public.reviews(product_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_store       ON public.reviews(store_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_customer    ON public.reviews(customer_id);
+
+-- ════════════════════════════════════════════════════════════════════════════
+--  IN-PLACE MIGRATIONS
+--  The CREATE TABLE statements above are IF NOT EXISTS, so they are no-ops on a
+--  database that already exists. Anything that must reach an existing database
+--  belongs here, written to be safe to re-run.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- Both reject endpoints write status = 'rejected', which the original CHECK
+-- constraints forbade — every rejection failed with a constraint violation.
+ALTER TABLE public.stores DROP CONSTRAINT IF EXISTS stores_status_check;
+ALTER TABLE public.stores ADD CONSTRAINT stores_status_check
+  CHECK (status IN ('active','pending','suspended','rejected'));
+
+ALTER TABLE public.agents DROP CONSTRAINT IF EXISTS agents_status_check;
+ALTER TABLE public.agents ADD CONSTRAINT agents_status_check
+  CHECK (status IN ('active','pending','suspended','rejected'));
+
+-- Customer registration collects these; without columns they were discarded.
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS date_of_birth  DATE;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS gender         TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS address_line1  TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS address_line2  TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS landmark       TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS pin_code       TEXT;
 
 -- ════════════════════════════════════════════════════════════════════════════
 --  TRIGGERS — auto-update updated_at

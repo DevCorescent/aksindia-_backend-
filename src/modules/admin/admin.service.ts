@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import { query, queryOne, execute } from '../../config/db';
 import { mapProfile } from '../../utils/mappers';
 import { invalidateProfileCache } from '../../middleware/auth';
+import { MIN_PASSWORD_LENGTH, PASSWORD_TOO_SHORT } from '../../config/constants';
 import type { User } from '../../types';
 
 export const adminService = {
@@ -38,8 +39,8 @@ export const adminService = {
 
   /** Admin-only password override for existing users (Bug 4). */
   async resetUserPassword(userId: string, newPassword: string): Promise<void> {
-    if (!newPassword || newPassword.length < 6) {
-      throw new Error('Password must be at least 6 characters');
+    if (!newPassword || newPassword.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(PASSWORD_TOO_SHORT);
     }
     const row = await queryOne<{ id: string }>(
       'SELECT id FROM profiles WHERE id = $1',

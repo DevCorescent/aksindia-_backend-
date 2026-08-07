@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { agentsService } from './agents.service';
-import { ok, created, serverError } from '../../utils/response';
+import { ok, created, badRequest, serverError } from '../../utils/response';
 
 export const agentsController = {
   async list(req: Request, res: Response): Promise<void> {
@@ -17,10 +17,12 @@ export const agentsController = {
   },
   async create(req: Request, res: Response): Promise<void> {
     try {
-      // Frontend sends `id`, older callers may send `agentId` — accept both.
-      const agentId = req.body.agentId ?? req.body.id ?? req.user!.id;
-      await agentsService.create(agentId, req.body);
-      created(res, { message: 'Agent created' });
+      // Accept either key. No fallback to req.user: this is an admin-only route,
+      // so defaulting to the caller silently filed the agent record against the
+      // admin's own profile instead of failing loudly.
+      const agentId = (req.body.agentId ?? req.body.id) as string | undefined;
+      if (!agentId) { badRequest(res, 'agentId is required'); return; }
+      created(res, await agentsService.create(agentId, req.body));
     } catch (e) { serverError(res, (e as Error).message); }
   },
   async approve(req: Request, res: Response): Promise<void> {

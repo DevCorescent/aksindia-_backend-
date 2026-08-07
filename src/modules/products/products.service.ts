@@ -28,6 +28,15 @@ function buildUpdate(patch: Partial<Product>): { fields: string[]; values: unkno
   return { fields, values };
 }
 
+/**
+ * An empty available_cities means "available everywhere": it is what the admin
+ * panel stores for a nationwide product and what the store UI sends by default.
+ * Matching on ANY() alone made every such product invisible to city-filtered views.
+ */
+function cityMatches(placeholder: number): string {
+  return `(cardinality(available_cities) = 0 OR $${placeholder} = ANY(available_cities))`;
+}
+
 export const productsService = {
   async list(role: UserRole, storeId?: string, filters?: { category?: string; city?: string; featured?: boolean }): Promise<Product[]> {
     const params: unknown[] = [];
@@ -40,7 +49,7 @@ export const productsService = {
     }
 
     if (filters?.category) where.push(`category = $${params.push(filters.category)}`);
-    if (filters?.city)     where.push(`$${params.push(filters.city)} = ANY(available_cities)`);
+    if (filters?.city)     where.push(cityMatches(params.push(filters.city)));
     if (filters?.featured) where.push(`featured = true`);
 
     const sql = `SELECT * FROM products${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC`;
@@ -53,7 +62,7 @@ export const productsService = {
     const where: string[] = [`status = 'active'`];
 
     if (filters?.category) where.push(`category = $${params.push(filters.category)}`);
-    if (filters?.city)     where.push(`$${params.push(filters.city)} = ANY(available_cities)`);
+    if (filters?.city)     where.push(cityMatches(params.push(filters.city)));
     if (filters?.featured) where.push(`featured = true`);
     if (filters?.storeId)  where.push(`store_id = $${params.push(filters.storeId)}`);
 
@@ -64,7 +73,7 @@ export const productsService = {
   async featured(city?: string): Promise<Product[]> {
     const params: unknown[] = [];
     const where: string[] = [`status = 'active'`, `featured = true`];
-    if (city) where.push(`$${params.push(city)} = ANY(available_cities)`);
+    if (city) where.push(cityMatches(params.push(city)));
     const rows = await query(`SELECT * FROM products WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT 20`, params);
     return rows.map(mapProduct);
   },
@@ -72,7 +81,7 @@ export const productsService = {
   async search(term: string, city?: string): Promise<Product[]> {
     const params: unknown[] = [`%${term}%`, `%${term}%`];
     const where = [`status = 'active'`, `(name ILIKE $1 OR description ILIKE $2)`];
-    if (city) where.push(`$${params.push(city)} = ANY(available_cities)`);
+    if (city) where.push(cityMatches(params.push(city)));
     const rows = await query(`SELECT * FROM products WHERE ${where.join(' AND ')} ORDER BY featured DESC, created_at DESC LIMIT 50`, params);
     return rows.map(mapProduct);
   },
@@ -92,11 +101,16 @@ export const productsService = {
          highlights, specifications, warranty, return_policy)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
        RETURNING *`,
+      // Every NOT NULL column is defaulted here. An undefined parameter reaches
+      // Postgres as NULL, which overrides the column DEFAULT rather than falling
+      // back to it — so a partial payload failed the constraint with a bare 500.
       [
-        storeId ?? null, rest.name, rest.description, rest.price, rest.mrp, rest.commission,
-        rest.categoryId, rest.category, rest.brand ?? null, rest.stock,
-        rest.imageColor, rest.imageIcon, rest.thumbnail ?? null, rest.images ?? [],
-        rest.status, rest.featured, rest.availableCities ?? [],
+        storeId ?? null, rest.name, rest.description ?? '', rest.price,
+        rest.mrp ?? rest.price ?? 0, rest.commission ?? 10,
+        rest.categoryId ?? '', rest.category ?? '', rest.brand ?? null, rest.stock ?? 0,
+        rest.imageColor ?? '#6366f1', rest.imageIcon ?? '📦',
+        rest.thumbnail ?? null, rest.images ?? [],
+        rest.status ?? 'draft', rest.featured ?? false, rest.availableCities ?? [],
         rest.tags ?? [], rest.highlights ?? [],
         JSON.stringify(rest.specifications ?? []),
         rest.warranty ?? '', rest.returnPolicy ?? '',

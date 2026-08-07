@@ -3,8 +3,10 @@ import jwt from 'jsonwebtoken';
 import { randomUUID, randomBytes, createHash } from 'crypto';
 import { query, queryOne, execute } from '../../config/db';
 import { env } from '../../config/env';
+import { MIN_PASSWORD_LENGTH, PASSWORD_TOO_SHORT } from '../../config/constants';
 import type { User, UserRole } from '../../types';
 import { mapProfile } from '../../utils/mappers';
+import { isMailConfigured, sendPasswordResetEmail } from '../../utils/mailer';
 import { invalidateProfileCache } from '../../middleware/auth';
 
 // Password-reset tokens expire after one hour.
@@ -90,6 +92,12 @@ export const authService = {
     phone?: string;
     city?: string;
     state?: string;
+    dateOfBirth?: string;
+    gender?: string;
+    addressLine1?: string;
+    addressLine2?: string;
+    landmark?: string;
+    pinCode?: string;
   }): Promise<{ userId: string }> {
     const existing = await queryOne('SELECT id FROM profiles WHERE email = $1', [opts.email.toLowerCase().trim()]);
     if (existing) throw new Error('Email already registered');
@@ -98,10 +106,14 @@ export const authService = {
     const userId = randomUUID();
 
     await execute(
-      `INSERT INTO profiles (id, name, email, password_hash, role, phone, city, state)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      `INSERT INTO profiles
+         (id, name, email, password_hash, role, phone, city, state,
+          date_of_birth, gender, address_line1, address_line2, landmark, pin_code)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
       [userId, opts.name, opts.email.toLowerCase().trim(), passwordHash, opts.role,
-       opts.phone ?? null, opts.city ?? null, opts.state ?? null],
+       opts.phone ?? null, opts.city ?? null, opts.state ?? null,
+       opts.dateOfBirth ?? null, opts.gender ?? null, opts.addressLine1 ?? null,
+       opts.addressLine2 ?? null, opts.landmark ?? null, opts.pinCode ?? null],
     );
     await execute('INSERT INTO wallets (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING', [userId]);
 
@@ -117,7 +129,9 @@ export const authService = {
 
     const valid = await bcrypt.compare(currentPassword, row.password_hash);
     if (!valid) throw new Error('Current password is incorrect');
-    if (newPassword.length < 6) throw new Error('New password must be at least 6 characters');
+    if (newPassword.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(`New password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+    }
 
     const newHash = await bcrypt.hash(newPassword, 12);
     await execute('UPDATE profiles SET password_hash = $1, updated_at = NOW() WHERE id = $2', [newHash, userId]);
@@ -161,7 +175,7 @@ export const authService = {
     await execute('DELETE FROM refresh_tokens WHERE id = $1 AND user_id = $2', [sessionId, userId]);
   },
 
-  async forgotPassword(email: string): Promise<{ message: string; devResetLink?: string }> {
+  async forgotPassword(email: string): Promise<{ message: string; emailSent: boolean; devResetLink?: string }> {
     const normalized = email.toLowerCase().trim();
     const row = await queryOne<{ id: string }>(
       'SELECT id FROM profiles WHERE email = $1',
@@ -170,7 +184,10 @@ export const authService = {
 
     // Generic response — never reveals whether the email exists.
     const message = 'If an account exists for that email, a password reset link has been generated.';
-    if (!row) return { message };
+    // Reports whether delivery is configured at all, never whether this address
+    // matched — so the value is identical for known and unknown emails.
+    const emailSent = isMailConfigured();
+    if (!row) return { message, emailSent };
 
     const token     = randomBytes(32).toString('hex');
     const tokenHash = createHash('sha256').update(token).digest('hex');
@@ -183,22 +200,29 @@ export const authService = {
       [row.id, tokenHash, expiresAt],
     );
 
+    const resetLink = `${env.frontendUrl}/reset-password?token=${token}`;
+    const delivered = await sendPasswordResetEmail(normalized, resetLink);
+
+    // With no provider configured the link is otherwise unreachable. Outside
+    // production, hand it back so the flow can be completed manually; in
+    // production log loudly instead — a user who can't be emailed can't recover.
     let devResetLink: string | undefined;
-    if (env.nodeEnv !== 'production') {
-      // Development-only: no SMTP is configured, so hand the link back to the
-      // caller to complete the flow manually. Never returned in production.
-      devResetLink = `${env.frontendUrl}/reset-password?token=${token}`;
-    } else {
-      // Production: an email provider would send the reset link to the user here.
-      console.log(`[auth] password reset requested for ${normalized}`);
+    if (!delivered) {
+      if (env.nodeEnv === 'production') {
+        console.error(
+          `[auth] password reset for ${normalized} was NOT delivered — configure MAIL_PROVIDER/MAIL_FROM`,
+        );
+      } else {
+        devResetLink = resetLink;
+      }
     }
 
-    return { message, ...(devResetLink ? { devResetLink } : {}) };
+    return { message, emailSent, ...(devResetLink ? { devResetLink } : {}) };
   },
 
   async resetPassword(token: string, newPassword: string): Promise<void> {
     if (!token) throw new Error('Invalid or expired reset token');
-    if (newPassword.length < 6) throw new Error('Password must be at least 6 characters');
+    if (newPassword.length < MIN_PASSWORD_LENGTH) throw new Error(PASSWORD_TOO_SHORT);
 
     const tokenHash = createHash('sha256').update(token).digest('hex');
     const row = await queryOne<{ id: string; user_id: string }>(

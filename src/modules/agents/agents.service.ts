@@ -37,11 +37,28 @@ export const agentsService = {
     return rowToAgent(row as Record<string, unknown>);
   },
 
-  async create(agentId: string, payload: { agentCode: string; commissionRate: number; status: Agent['status'] }): Promise<void> {
+  async create(
+    agentId: string,
+    payload: { agentCode?: string; commissionRate?: number; status?: Agent['status'] },
+  ): Promise<Agent> {
+    const code = payload.agentCode?.trim();
+
+    // agent_code is UNIQUE with a sequence-backed DEFAULT. Passing '' or NULL
+    // defeats that default — the first such row takes the blank code and every
+    // later one collides — so omit the column entirely and let Postgres assign.
+    const columns = ['id', 'commission_rate', 'status'];
+    const values: unknown[] = [agentId, payload.commissionRate ?? 10, payload.status ?? 'pending'];
+    if (code) {
+      columns.push('agent_code');
+      values.push(code);
+    }
+
     await execute(
-      'INSERT INTO agents (id, agent_code, commission_rate, status) VALUES ($1, $2, $3, $4)',
-      [agentId, payload.agentCode, payload.commissionRate, payload.status ?? 'pending'],
+      `INSERT INTO agents (${columns.join(', ')}) VALUES (${values.map((_, i) => `$${i + 1}`).join(', ')})`,
+      values,
     );
+    // Return the full record so callers get the generated agent_code.
+    return this.getById(agentId);
   },
 
   async approve(id: string, adminId: string): Promise<Agent> {

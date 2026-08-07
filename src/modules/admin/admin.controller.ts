@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { adminService } from './admin.service';
 import { ok, created, badRequest, noContent, serverError } from '../../utils/response';
+import { PASSWORD_TOO_SHORT } from '../../config/constants';
 
 export const adminController = {
   async listUsers(_req: Request, res: Response): Promise<void> {
@@ -24,7 +25,7 @@ export const adminController = {
     } catch (e) {
       const message = (e as Error).message;
       if (message === 'User not found') { badRequest(res, message); return; }
-      if (message === 'Password must be at least 6 characters') { badRequest(res, message); return; }
+      if (message === PASSWORD_TOO_SHORT) { badRequest(res, message); return; }
       serverError(res, message);
     }
   },

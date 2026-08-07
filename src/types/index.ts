@@ -10,6 +10,12 @@ export interface User {
   phone?: string;
   city?: string;
   state?: string;
+  dateOfBirth?: string;
+  gender?: string;
+  addressLine1?: string;
+  addressLine2?: string;
+  landmark?: string;
+  pinCode?: string;
   createdAt: string;
 }
 
@@ -81,7 +87,7 @@ export interface Store {
   city: string;
   state: string;
   storeType: 'product' | 'service';
-  status: 'active' | 'pending' | 'suspended';
+  status: 'active' | 'pending' | 'suspended' | 'rejected';
   commissionRate: number;
   walletBalance: number;
   totalSales: number;
@@ -175,7 +181,7 @@ export interface Agent {
   state: string;
   agentCode: string;
   commissionRate: number;
-  status: 'active' | 'pending' | 'suspended';
+  status: 'active' | 'pending' | 'suspended' | 'rejected';
   totalSales: number;
   totalOrders: number;
   walletBalance: number;
