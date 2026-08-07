@@ -17,7 +17,9 @@ export const agentsController = {
   },
   async create(req: Request, res: Response): Promise<void> {
     try {
-      await agentsService.create(req.body.agentId ?? req.user!.id, req.body);
+      // Frontend sends `id`, older callers may send `agentId` — accept both.
+      const agentId = req.body.agentId ?? req.body.id ?? req.user!.id;
+      await agentsService.create(agentId, req.body);
       created(res, { message: 'Agent created' });
     } catch (e) { serverError(res, (e as Error).message); }
   },
