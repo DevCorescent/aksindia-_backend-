@@ -203,15 +203,10 @@ export const authService = {
     const resetLink = `${env.frontendUrl}/reset-password?token=${token}`;
     const delivered = await sendPasswordResetEmail(normalized, resetLink);
 
-    // With no provider configured the link is otherwise unreachable. Outside
-    // production, hand it back so the flow can be completed manually; in
-    // production log loudly instead — a user who can't be emailed can't recover.
     let devResetLink: string | undefined;
     if (!delivered) {
       if (env.nodeEnv === 'production') {
-        console.error(
-          `[auth] password reset for ${normalized} was NOT delivered — configure MAIL_PROVIDER/MAIL_FROM`,
-        );
+        console.error(`[auth] password reset for ${normalized} was NOT delivered — configure SMTP_HOST/MAIL_FROM`);
       } else {
         devResetLink = resetLink;
       }

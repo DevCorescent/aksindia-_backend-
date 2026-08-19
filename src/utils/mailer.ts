@@ -8,24 +8,17 @@ export interface MailMessage {
   html?: string;
 }
 
-/**
- * True once SMTP credentials are present (SMTP_HOST + MAIL_FROM).
- * Callers use this to decide what to tell the user, rather than silently
- * pretending a message was delivered.
- */
 export function isMailConfigured(): boolean {
   return Boolean(env.smtpHost && env.mailFrom);
 }
 
-// Built once on first send and reused — nodemailer pools connections internally.
 let transporter: Transporter | null = null;
 
 function getTransporter(): Transporter {
   if (!transporter) {
     transporter = nodemailer.createTransport({
-      host: env.smtpHost,
-      port: env.smtpPort,
-      // true for port 465 (implicit TLS); false for 587 (STARTTLS).
+      host:   env.smtpHost,
+      port:   env.smtpPort,
       secure: env.smtpSecure || env.smtpPort === 465,
       ...(env.smtpUser ? { auth: { user: env.smtpUser, pass: env.smtpPass } } : {}),
     });
@@ -33,25 +26,17 @@ function getTransporter(): Transporter {
   return transporter;
 }
 
-/**
- * Delivers a message. Resolves to true only when the SMTP server accepted it —
- * a false return is a normal, handled path, never an exception for the caller.
- *
- * Works with any SMTP provider (Resend, SendGrid, SES, Postmark, Gmail…): set
- * SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS and MAIL_FROM. No code change needed.
- */
 export async function sendMail(msg: MailMessage): Promise<boolean> {
   if (!isMailConfigured()) {
     console.warn(`[mailer] not configured — dropped "${msg.subject}" to ${msg.to}`);
     return false;
   }
-
   try {
     await getTransporter().sendMail({
-      from: env.mailFrom,
-      to: msg.to,
+      from:    env.mailFrom,
+      to:      msg.to,
       subject: msg.subject,
-      text: msg.text,
+      text:    msg.text,
       ...(msg.html ? { html: msg.html } : {}),
     });
     return true;
@@ -61,7 +46,6 @@ export async function sendMail(msg: MailMessage): Promise<boolean> {
   }
 }
 
-/** Sends the password reset link. Returns false when nothing was delivered. */
 export async function sendPasswordResetEmail(to: string, resetLink: string): Promise<boolean> {
   return sendMail({
     to,
@@ -71,10 +55,26 @@ export async function sendPasswordResetEmail(to: string, resetLink: string): Pro
       `Reset your password: ${resetLink}\n\n` +
       `This link expires in 1 hour and can be used once. ` +
       `If you didn't request this, you can safely ignore this message.`,
-    html:
-      `<p>We received a request to reset the password for your AskIndia account.</p>` +
-      `<p><a href="${resetLink}">Reset your password</a></p>` +
-      `<p>This link expires in 1 hour and can be used once. ` +
-      `If you didn't request this, you can safely ignore this message.</p>`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:32px;border:1px solid #e2e8f0;border-radius:12px">
+        <h2 style="color:#1e293b;margin-bottom:8px">Password Reset</h2>
+        <p style="color:#475569;font-size:15px;line-height:1.6">
+          We received a request to reset the password for your AskIndia account.<br>
+          Click the button below to choose a new password. This link expires in <strong>1 hour</strong>.
+        </p>
+        <div style="text-align:center;margin:32px 0">
+          <a href="${resetLink}"
+             style="background:#4f46e5;color:#fff;text-decoration:none;padding:14px 32px;border-radius:8px;font-size:15px;font-weight:600;display:inline-block">
+            Reset Password
+          </a>
+        </div>
+        <p style="color:#94a3b8;font-size:13px">
+          If you didn't request this, you can safely ignore this email.<br>
+          The link will expire automatically after 1 hour.
+        </p>
+        <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0">
+        <p style="color:#94a3b8;font-size:12px;text-align:center">AskIndia Technologies Pvt. Ltd.</p>
+      </div>
+    `,
   });
 }
