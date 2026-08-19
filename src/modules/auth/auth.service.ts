@@ -6,7 +6,7 @@ import { env } from '../../config/env';
 import { MIN_PASSWORD_LENGTH, PASSWORD_TOO_SHORT } from '../../config/constants';
 import type { User, UserRole } from '../../types';
 import { mapProfile } from '../../utils/mappers';
-import { isMailConfigured, sendPasswordResetEmail } from '../../utils/mailer';
+import { isMailConfigured, sendPasswordResetEmail, sendWelcomeEmail } from '../../utils/mailer';
 import { invalidateProfileCache } from '../../middleware/auth';
 
 // Password-reset tokens expire after one hour.
@@ -116,6 +116,11 @@ export const authService = {
        opts.addressLine2 ?? null, opts.landmark ?? null, opts.pinCode ?? null],
     );
     await execute('INSERT INTO wallets (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING', [userId]);
+
+    // Fire-and-forget — a mail failure must never block account creation.
+    sendWelcomeEmail(opts.email.toLowerCase().trim(), opts.name).catch(
+      err => console.error('[auth] welcome email failed:', err),
+    );
 
     return { userId };
   },
