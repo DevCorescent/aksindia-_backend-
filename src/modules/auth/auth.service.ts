@@ -36,6 +36,8 @@ export const authService = {
     const valid = await bcrypt.compare(password, row.password_hash as string);
     if (!valid) throw new Error('Invalid email or password');
 
+    if (row.is_active === false) throw new Error('Your account has been deactivated. Please contact support.');
+
     const user = mapProfile(row);
     const accessToken  = signAccess(user.id, user.role, user.email);
     const refreshToken = signRefresh(user.id);
