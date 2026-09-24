@@ -43,9 +43,25 @@ router.get('/',                  authenticate, serviceOrdersController.list);
  *     responses:
  *       200: { description: The requested service order }
  *       401: { description: Missing/invalid token }
- *       500: { description: Service order not found }
+ *       404: { description: Service order not found or not accessible to the caller }
  */
 router.get('/:id',               authenticate, serviceOrdersController.getById);
+/**
+ * @openapi
+ * /service-orders/{id}/tracking:
+ *   get:
+ *     tags: [ServiceOrders]
+ *     summary: Service order with its status timeline
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: "{ order, timeline: [{ status, at, note? }] }" }
+ *       404: { description: Service order not found or not accessible to the caller }
+ */
+router.get('/:id/tracking',      authenticate, serviceOrdersController.tracking);
 /**
  * @openapi
  * /service-orders:

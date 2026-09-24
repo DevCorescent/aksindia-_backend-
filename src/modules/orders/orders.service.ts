@@ -2,6 +2,7 @@ import { query, queryOne, execute } from '../../config/db';
 import type { Order, UserRole } from '../../types';
 import { mapOrder } from '../../utils/mappers';
 import { walletsService } from '../wallets/wallets.service';
+import { orderHistoryService } from './order-history.service';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -36,12 +37,18 @@ export const ordersService = {
   async list(role: UserRole, userId?: string, storeId?: string): Promise<Order[]> {
     const params: unknown[] = [];
     const where: string[] = [];
-    if (role === 'customer'    && userId)  where.push(`customer_id = $${params.push(userId)}`);
-    if (role === 'store_owner' && storeId) where.push(`store_id = $${params.push(storeId)}`);
-    if (role === 'agent'       && userId)  where.push(`agent_id = $${params.push(userId)}`);
+    if (role === 'customer')         where.push(`customer_id = $${params.push(userId)}`);
+    else if (role === 'store_owner') {
+      // A store account without a linked store has no orders — never fall
+      // through to the unfiltered list.
+      if (!storeId) return [];
+      where.push(`store_id = $${params.push(storeId)}`);
+    }
+    else if (role === 'agent')       where.push(`agent_id = $${params.push(userId)}`);
     // Delivery partners see the fulfilment queue — orders that are ready to ship,
     // in transit, or already delivered (their work history).
-    if (role === 'delivery_partner')       where.push(`status IN ('processing','shipped','delivered')`);
+    else if (role === 'delivery_partner') where.push(`status IN ('processing','shipped','delivered')`);
+    else if (role !== 'admin')       return [];
     const sql = `SELECT * FROM orders${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC`;
     const rows = await query(sql, params);
     return rows.map(mapOrder);
@@ -77,6 +84,7 @@ export const ordersService = {
     );
     if (!row) throw new Error('Create failed');
     const order = mapOrder(row);
+    await orderHistoryService.record(order.id, 'product', order.status, payload.customerId);
 
     // Decrement stock for each product item
     const items = payload.items as Array<{ productId?: string; quantity?: number }>;
@@ -92,7 +100,7 @@ export const ordersService = {
     return order;
   },
 
-  async update(id: string, patch: Partial<Order>): Promise<Order> {
+  async update(id: string, patch: Partial<Order>, changedBy?: string): Promise<Order> {
     const current = await this.getById(id);
 
     const fields: string[] = [];
@@ -112,6 +120,9 @@ export const ordersService = {
     );
     if (!row) throw new Error('Order not found');
     const updated = mapOrder(row);
+    if (updated.status !== current.status) {
+      await orderHistoryService.record(id, 'product', updated.status, changedBy, updated.status === 'cancelled' ? updated.cancelReason : undefined);
+    }
 
     // Credit store wallet when order is delivered and paid
     const wasDelivered = current.status !== 'delivered' && updated.status === 'delivered';
@@ -123,12 +134,13 @@ export const ordersService = {
     return updated;
   },
 
-  async cancel(id: string, reason: string): Promise<Order> {
+  async cancel(id: string, reason: string, changedBy?: string): Promise<Order> {
     const row = await queryOne(
       `UPDATE orders SET status = 'cancelled', cancel_reason = $1 WHERE id = $2 AND status NOT IN ('delivered','cancelled') RETURNING *`,
       [reason, id],
     );
     if (!row) throw new Error('Order not found or cannot be cancelled');
+    await orderHistoryService.record(id, 'product', 'cancelled', changedBy, reason);
     return mapOrder(row);
   },
 };

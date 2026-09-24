@@ -5,6 +5,8 @@ export interface User {
   name: string;
   email: string;
   role: UserRole;
+  /** Login ID for admin-created store accounts; sign-in accepts it in place of email. */
+  username?: string;
   avatar?: string;
   storeId?: string;
   phone?: string;
@@ -160,7 +162,7 @@ export interface ServiceOrder {
   customerEmail: string;
   customerPhone?: string;
   amount: number;
-  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled';
+  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'rejected';
   scheduledDate: string;
   address: string;
   city: string;
@@ -170,6 +172,12 @@ export interface ServiceOrder {
   agentCode?: string;
   agentCommission?: number;
   createdAt: string;
+}
+
+export interface OrderStatusEvent {
+  status: string;
+  at: string;
+  note?: string;
 }
 
 export interface Agent {

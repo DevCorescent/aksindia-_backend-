@@ -20,6 +20,9 @@ export const env = {
   smtpUser:              process.env.SMTP_USER ?? '',
   smtpPass:              process.env.SMTP_PASS ?? '',
   smtpSecure:            process.env.SMTP_SECURE === 'true',
+  // Final-stage feature: email-OTP password reset and "forgot user ID". Off
+  // until the client enables it; the existing reset-link flow is unaffected.
+  passwordResetOtpEnabled: process.env.PASSWORD_RESET_OTP_ENABLED === 'true',
   razorpayWebhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET ?? '',
   cloudinaryUrl:         process.env.CLOUDINARY_URL ?? '',
   cashfreeAppId:         process.env.CASHFREE_APP_ID ?? '',
