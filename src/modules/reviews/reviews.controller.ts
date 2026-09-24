@@ -2,18 +2,30 @@ import type { Request, Response } from 'express';
 import { reviewsService } from './reviews.service';
 import { ok, badRequest, forbidden, notFound, serverError } from '../../utils/response';
 
+const MAX_REVIEW_LENGTH = 2000;
+
 export const reviewsController = {
   async create(req: Request, res: Response): Promise<void> {
     try {
-      const { orderId, productId, rating, reviewText } = req.body as {
-        orderId: string; productId: string;
-        rating: number; reviewText?: string;
+      const { orderId, productId, serviceId, rating, reviewText } = req.body as {
+        orderId?: string; productId?: string; serviceId?: string;
+        rating?: number; reviewText?: string;
       };
-      if (!orderId || !productId || !rating) { badRequest(res, 'orderId, productId and rating are required'); return; }
-      if (rating < 1 || rating > 5)          { badRequest(res, 'Rating must be between 1 and 5'); return; }
+      if (!orderId || (!productId && !serviceId) || rating === undefined) {
+        badRequest(res, 'orderId, productId (or serviceId) and rating are required'); return;
+      }
+      if (productId && serviceId) { badRequest(res, 'Send either productId or serviceId, not both'); return; }
+      const stars = Number(rating);
+      if (!Number.isInteger(stars) || stars < 1 || stars > 5) { badRequest(res, 'Rating must be a whole number between 1 and 5'); return; }
+      if (reviewText !== undefined && (typeof reviewText !== 'string' || reviewText.length > MAX_REVIEW_LENGTH)) {
+        badRequest(res, `Review text must be at most ${MAX_REVIEW_LENGTH} characters`); return;
+      }
+      if (req.user!.role !== 'customer') { forbidden(res, 'Only customers can review orders'); return; }
 
       const customerId = req.user!.id;
-      const check = await reviewsService.checkReviewable(orderId, productId, customerId);
+      const check = serviceId
+        ? await reviewsService.checkServiceReviewable(orderId, serviceId, customerId)
+        : await reviewsService.checkReviewable(orderId, productId!, customerId);
       if (!check.ok) {
         if (check.status === 403)      forbidden(res, check.error);
         else if (check.status === 404) notFound(res, check.error);
@@ -22,11 +34,12 @@ export const reviewsController = {
       }
 
       const review = await reviewsService.create({
-        orderId, productId,
+        orderId,
+        ...(serviceId ? { serviceId } : { productId }),
         storeId: check.storeId,
         customerId,
-        rating: Number(rating),
-        reviewText: reviewText ?? '',
+        rating: stars,
+        reviewText: reviewText?.trim() ?? '',
       });
       ok(res, review);
     } catch (e) {
@@ -62,8 +75,20 @@ export const reviewsController = {
     }
   },
 
+  /** Reviews on the signed-in store's / service provider's own items. */
+  async getReceived(req: Request, res: Response): Promise<void> {
+    try {
+      ok(res, await reviewsService.getReceived(req.user!));
+    } catch (e) {
+      serverError(res, (e as Error).message);
+    }
+  },
+
   async getByOrder(req: Request, res: Response): Promise<void> {
     try {
+      if (!(await reviewsService.canViewOrder(req.params.orderId, req.user!))) {
+        notFound(res, 'Order not found'); return;
+      }
       const reviews = await reviewsService.getByOrder(req.params.orderId);
       ok(res, reviews);
     } catch (e) {

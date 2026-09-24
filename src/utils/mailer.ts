@@ -106,3 +106,49 @@ export async function sendPasswordResetEmail(to: string, resetLink: string): Pro
     `,
   });
 }
+
+export async function sendPasswordResetOtpEmail(to: string, otp: string, ttlMinutes: number): Promise<boolean> {
+  return sendMail({
+    to,
+    subject: 'Your AskIndia password reset code',
+    text:
+      `Your AskIndia password reset code is ${otp}.\n\n` +
+      `It expires in ${ttlMinutes} minutes and can be used once. ` +
+      `If you didn't request this, you can safely ignore this message.`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:32px;border:1px solid #e2e8f0;border-radius:12px">
+        <h2 style="color:#1e293b;margin-bottom:8px">Password Reset Code</h2>
+        <p style="color:#475569;font-size:15px;line-height:1.6">Use this code to reset your AskIndia password. It expires in <strong>${ttlMinutes} minutes</strong>.</p>
+        <p style="text-align:center;font-size:32px;font-weight:700;letter-spacing:8px;color:#1e293b;margin:32px 0">${otp}</p>
+        <p style="color:#94a3b8;font-size:13px">If you didn't request this, you can safely ignore this email.</p>
+        <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0">
+        <p style="color:#94a3b8;font-size:12px;text-align:center">AskIndia Technologies Pvt. Ltd.</p>
+      </div>
+    `,
+  });
+}
+
+export async function sendUsernameReminderEmail(to: string, username: string): Promise<boolean> {
+  return sendMail({
+    to,
+    subject: 'Your AskIndia User ID',
+    text:
+      `You asked for the User ID of your AskIndia account.\n\n` +
+      `User ID: ${username}\n\nSign in: ${env.frontendUrl}/login\n\n` +
+      `If you didn't request this, you can safely ignore this message.`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:32px;border:1px solid #e2e8f0;border-radius:12px">
+        <h2 style="color:#1e293b;margin-bottom:8px">Your User ID</h2>
+        <p style="color:#475569;font-size:15px;line-height:1.6">You asked for the User ID of your AskIndia account:</p>
+        <p style="text-align:center;font-size:22px;font-weight:700;color:#1e293b;margin:24px 0">${username}</p>
+        <div style="text-align:center;margin:24px 0">
+          <a href="${env.frontendUrl}/login"
+             style="background:#4f46e5;color:#fff;text-decoration:none;padding:14px 32px;border-radius:8px;font-size:15px;font-weight:600;display:inline-block">
+            Sign In
+          </a>
+        </div>
+        <p style="color:#94a3b8;font-size:13px">If you didn't request this, you can safely ignore this email.</p>
+      </div>
+    `,
+  });
+}

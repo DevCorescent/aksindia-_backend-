@@ -2,14 +2,16 @@ import { query, queryOne, execute } from '../../config/db';
 import type { ServiceOrder, UserRole } from '../../types';
 import { mapServiceOrder } from '../../utils/mappers';
 import { walletsService } from '../wallets/wallets.service';
+import { orderHistoryService } from '../orders/order-history.service';
 
 export const serviceOrdersService = {
   async list(role: UserRole, userId?: string): Promise<ServiceOrder[]> {
     const params: unknown[] = [];
     const where: string[] = [];
-    if (role === 'customer'         && userId) where.push(`customer_id = $${params.push(userId)}`);
-    if (role === 'service_provider' && userId) where.push(`provider_id = $${params.push(userId)}`);
-    if (role === 'agent'            && userId) where.push(`agent_id = $${params.push(userId)}`);
+    if (role === 'customer')              where.push(`customer_id = $${params.push(userId)}`);
+    else if (role === 'service_provider') where.push(`provider_id = $${params.push(userId)}`);
+    else if (role === 'agent')            where.push(`agent_id = $${params.push(userId)}`);
+    else if (role !== 'admin')            return [];
     const sql = `SELECT * FROM service_orders${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC`;
     const rows = await query(sql, params);
     return rows.map(mapServiceOrder);
@@ -40,16 +42,19 @@ export const serviceOrdersService = {
       ],
     );
     if (!row) throw new Error('Create failed');
-    return mapServiceOrder(row);
+    const order = mapServiceOrder(row);
+    await orderHistoryService.record(order.id, 'service', order.status, payload.customerId);
+    return order;
   },
 
-  async complete(id: string): Promise<ServiceOrder> {
+  async complete(id: string, changedBy?: string): Promise<ServiceOrder> {
     const row = await queryOne(
       `UPDATE service_orders SET status = 'completed' WHERE id = $1 AND status NOT IN ('completed','cancelled') RETURNING *`,
       [id],
     );
     if (!row) throw new Error('Service order not found or already finalized');
     const order = mapServiceOrder(row);
+    await orderHistoryService.record(id, 'service', 'completed', changedBy);
 
     // Credit provider wallet (full amount; platform takes commission separately)
     const providerCredit = order.amount - (order.agentCommission ?? 0);
@@ -89,6 +94,7 @@ export const serviceOrdersService = {
     );
     if (!row) throw new Error('Service order not found or already finalized');
     const order = mapServiceOrder(row);
+    await orderHistoryService.record(id, 'service', 'cancelled', cancelledBy, reason);
 
     // Notify the other party
     const notifyUserId = cancelledBy === order.customerId ? order.providerId : order.customerId;
@@ -100,13 +106,14 @@ export const serviceOrdersService = {
     return order;
   },
 
-  async reject(id: string, reason: string): Promise<ServiceOrder> {
+  async reject(id: string, reason: string, changedBy?: string): Promise<ServiceOrder> {
     const row = await queryOne(
       `UPDATE service_orders SET status = 'rejected' WHERE id = $1 AND status = 'pending' RETURNING *`,
       [id],
     );
     if (!row) throw new Error('Service order not found or not in pending state');
     const order = mapServiceOrder(row);
+    await orderHistoryService.record(id, 'service', 'rejected', changedBy, reason);
 
     await execute(
       "INSERT INTO notifications (user_id, type, title, message) VALUES ($1, 'order', 'Service Request Declined', $2)",
@@ -116,7 +123,7 @@ export const serviceOrdersService = {
     return order;
   },
 
-  async update(id: string, patch: Partial<ServiceOrder>): Promise<ServiceOrder> {
+  async update(id: string, patch: Partial<ServiceOrder>, changedBy?: string): Promise<ServiceOrder> {
     const fields: string[] = [];
     const values: unknown[] = [];
     let i = 1;
@@ -130,6 +137,10 @@ export const serviceOrdersService = {
       values,
     );
     if (!row) throw new Error('Service order not found');
-    return mapServiceOrder(row);
+    const updated = mapServiceOrder(row);
+    if (patch.status !== undefined) {
+      await orderHistoryService.record(id, 'service', updated.status, changedBy);
+    }
+    return updated;
   },
 };

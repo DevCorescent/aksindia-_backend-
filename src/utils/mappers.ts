@@ -40,6 +40,7 @@ export function mapProfile(row: any): User {
     name:      row.name,
     email:     row.email,
     role:      row.role,
+    username:  row.username ?? undefined,
     phone:     row.phone   ?? undefined,
     city:      row.city    ?? undefined,
     state:     row.state   ?? undefined,

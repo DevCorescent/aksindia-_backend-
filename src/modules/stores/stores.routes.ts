@@ -153,7 +153,12 @@ router.get('/:id/products',authenticate, storesController.getProducts);
  *   post:
  *     tags: [Stores]
  *     summary: Create a store
- *     description: Requires admin or store_owner. ownerId/ownerName default to the caller when omitted.
+ *     description: >-
+ *       Requires admin or store_owner. A store_owner always creates their own
+ *       pending store. An admin may pass `ownerAccount` to create the store's
+ *       own login (store_owner for product stores, service_provider for service
+ *       stores) in the same call; otherwise ownerId/ownerName default to the
+ *       caller when omitted.
  *     requestBody:
  *       required: true
  *       content:
@@ -180,9 +185,17 @@ router.get('/:id/products',authenticate, storesController.getProducts);
  *               invoiceSettings: { type: object }
  *               ownerId:        { type: string }
  *               ownerName:      { type: string }
+ *               ownerAccount:
+ *                 type: object
+ *                 description: Admin only — login to create for the store
+ *                 properties:
+ *                   name:     { type: string }
+ *                   email:    { type: string }
+ *                   username: { type: string, description: Login User ID }
+ *                   password: { type: string }
  *     responses:
  *       201: { description: Store created }
- *       400: { description: name and slug required }
+ *       400: { description: Validation error, or duplicate slug / email / User ID }
  *       401: { description: Missing/invalid token }
  *       403: { description: Not an admin or store_owner }
  */
@@ -194,7 +207,10 @@ router.post('/',           authenticate, requireRole('admin', 'store_owner'), st
  *   patch:
  *     tags: [Stores]
  *     summary: Update a store
- *     description: Requires admin or store_owner. Only supplied fields are updated.
+ *     description: >-
+ *       Requires admin or the store's owner. Only supplied fields are updated;
+ *       a store owner may only change profile fields (not status, commission,
+ *       wallet or sales totals).
  *     parameters:
  *       - in: path
  *         name: id
@@ -227,8 +243,8 @@ router.post('/',           authenticate, requireRole('admin', 'store_owner'), st
  *     responses:
  *       200: { description: Updated store }
  *       401: { description: Missing/invalid token }
- *       403: { description: Not an admin or store_owner }
- *       500: { description: Store not found }
+ *       403: { description: Not an admin, or not this store's owner }
+ *       404: { description: Store not found }
  */
 router.patch('/:id',       authenticate, requireRole('admin', 'store_owner'), storesController.update);
 
@@ -249,6 +265,40 @@ router.patch('/:id',       authenticate, requireRole('admin', 'store_owner'), st
  *       401: { description: Missing/invalid token }
  *       403: { description: Not an admin }
  */
+/**
+ * @openapi
+ * /stores/{id}/owner-account:
+ *   post:
+ *     tags: [Stores]
+ *     summary: Create a login for an admin-owned store (admin only)
+ *     description: >-
+ *       For stores created before store logins existed (owned by the admin).
+ *       Creates a store_owner (product store) or service_provider (service
+ *       store) account and hands the store over to it. Refuses stores that
+ *       already have their own owner.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, email, username, password]
+ *             properties:
+ *               name:     { type: string }
+ *               email:    { type: string }
+ *               username: { type: string, description: Login User ID }
+ *               password: { type: string }
+ *     responses:
+ *       200: { description: Updated store }
+ *       400: { description: Validation error, duplicate email/User ID, or store already has an owner }
+ *       404: { description: Store not found }
+ */
+router.post('/:id/owner-account', authenticate, requireRole('admin'), storesController.createOwnerAccount);
 router.post('/:id/activate', authenticate, requireRole('admin'), storesController.activate);
 
 /**

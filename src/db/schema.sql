@@ -436,6 +436,49 @@ ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS address_line2  TEXT;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS landmark       TEXT;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS pin_code       TEXT;
 
+-- Store / service-store logins created by an admin sign in with a login ID
+-- (username) as well as their email. Usernames never contain '@', so a sign-in
+-- identifier is unambiguous. Nullable: existing accounts keep email-only login.
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS username TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_username
+  ON public.profiles (LOWER(username)) WHERE username IS NOT NULL;
+
+-- serviceOrdersService.reject writes status = 'rejected', which the original
+-- CHECK forbade — every provider decline failed with a constraint violation.
+ALTER TABLE public.service_orders DROP CONSTRAINT IF EXISTS service_orders_status_check;
+ALTER TABLE public.service_orders ADD CONSTRAINT service_orders_status_check
+  CHECK (status IN ('pending','confirmed','in_progress','completed','cancelled','rejected'));
+
+-- Every status change on a product or service order, for customer tracking.
+-- order_id is not a FK because it points at either orders or service_orders.
+CREATE TABLE IF NOT EXISTS public.order_status_history (
+  id         UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  order_id   TEXT        NOT NULL,
+  order_type TEXT        NOT NULL CHECK (order_type IN ('product','service')),
+  status     TEXT        NOT NULL,
+  changed_by UUID        REFERENCES public.profiles(id) ON DELETE SET NULL,
+  note       TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_order_status_history_order
+  ON public.order_status_history(order_id, created_at);
+
+-- Reviews for completed service orders: a review targets a product OR a service.
+ALTER TABLE public.reviews ADD COLUMN IF NOT EXISTS service_id UUID
+  REFERENCES public.services(id) ON DELETE CASCADE;
+ALTER TABLE public.reviews ALTER COLUMN product_id DROP NOT NULL;
+ALTER TABLE public.reviews DROP CONSTRAINT IF EXISTS reviews_target_check;
+ALTER TABLE public.reviews ADD CONSTRAINT reviews_target_check
+  CHECK (product_id IS NOT NULL OR service_id IS NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reviews_order_service
+  ON public.reviews(order_id, service_id) WHERE service_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_reviews_service ON public.reviews(service_id);
+
+-- Email-OTP password recovery (feature-gated, see PASSWORD_RESET_OTP_ENABLED).
+-- OTP requests reuse password_resets; 'link' rows are the existing reset links.
+ALTER TABLE public.password_resets ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'link';
+ALTER TABLE public.password_resets ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
+
 -- ════════════════════════════════════════════════════════════════════════════
 --  TRIGGERS — auto-update updated_at
 -- ════════════════════════════════════════════════════════════════════════════

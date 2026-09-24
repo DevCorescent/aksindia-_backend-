@@ -1,17 +1,36 @@
 import type { Request, Response } from 'express';
-import { authService } from './auth.service';
-import { ok, created, badRequest, unauthorized, serverError } from '../../utils/response';
+import jwt from 'jsonwebtoken';
+import { env } from '../../config/env';
+import { authService, NOT_STORE_OWNER, OTP_DISABLED, INVALID_OTP } from './auth.service';
+import { ok, created, badRequest, unauthorized, forbidden, notFound, serverError } from '../../utils/response';
 import { MIN_PASSWORD_LENGTH, PASSWORD_TOO_SHORT } from '../../config/constants';
 
 const ALLOWED_ROLES = ['admin', 'store_owner', 'service_provider', 'customer', 'agent', 'delivery_partner'] as const;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Roles anyone may self-register with. The rest (admin, agent, delivery
+// partner) are created from the admin panel, which sends the admin's token.
+const SELF_SIGNUP_ROLES = ['customer', 'store_owner', 'service_provider'];
+
+/** True when the request carries a valid access token of an admin account. */
+async function isAdminCaller(req: Request): Promise<boolean> {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) return false;
+  try {
+    const { id } = jwt.verify(header.slice(7), env.jwtSecret) as { id: string };
+    return (await authService.getProfile(id)).role === 'admin';
+  } catch {
+    return false;
+  }
+}
 
 export const authController = {
   async signIn(req: Request, res: Response): Promise<void> {
     try {
-      const { email, password } = req.body as { email?: string; password?: string };
-      if (!email || !password) { badRequest(res, 'email and password required'); return; }
-      const result = await authService.signIn(email, password);
+      // `email` may also carry a store User ID; `identifier` is accepted as an alias.
+      const { email, identifier, password } = req.body as { email?: string; identifier?: string; password?: string };
+      const login = identifier ?? email;
+      if (!login || !password) { badRequest(res, 'email (or User ID) and password required'); return; }
+      const result = await authService.signIn(login, password);
       ok(res, result);
     } catch (e) {
       const message = (e as Error).message;
@@ -31,6 +50,9 @@ export const authController = {
       if (password.length < MIN_PASSWORD_LENGTH) { badRequest(res, PASSWORD_TOO_SHORT); return; }
       if (!ALLOWED_ROLES.includes(role as (typeof ALLOWED_ROLES)[number])) {
         badRequest(res, `role must be one of: ${ALLOWED_ROLES.join(', ')}`); return;
+      }
+      if (!SELF_SIGNUP_ROLES.includes(role) && !(await isAdminCaller(req))) {
+        forbidden(res, `Only an admin can create ${role} accounts`); return;
       }
       const result = await authService.signUp({
         email, password, name, role: role as never, phone, city, state,
@@ -75,7 +97,11 @@ export const authController = {
       await authService.updateProfile(req.user!.id, req.body);
       const updated = await authService.getProfile(req.user!.id);
       ok(res, updated);
-    } catch (e) { serverError(res, (e as Error).message); }
+    } catch (e) {
+      const message = (e as Error).message;
+      if (message === NOT_STORE_OWNER) { forbidden(res, message); return; }
+      serverError(res, message);
+    }
   },
 
   async changePassword(req: Request, res: Response): Promise<void> {
@@ -121,6 +147,49 @@ export const authController = {
       const message = (e as Error).message;
       if (message === 'Invalid or expired reset token') { badRequest(res, message); return; }
       if (message === PASSWORD_TOO_SHORT) { badRequest(res, message); return; }
+      serverError(res, message);
+    }
+  },
+
+  // ── Email-OTP recovery (feature-gated; 404 while disabled) ─────────────────
+
+  recoveryOptions(_req: Request, res: Response): void {
+    ok(res, authService.recoveryOptions());
+  },
+
+  async requestPasswordOtp(req: Request, res: Response): Promise<void> {
+    try {
+      const { identifier } = req.body as { identifier?: string };
+      if (!identifier) { badRequest(res, 'identifier (email or User ID) required'); return; }
+      ok(res, await authService.requestPasswordOtp(identifier));
+    } catch (e) {
+      const message = (e as Error).message;
+      if (message === OTP_DISABLED) { notFound(res, message); return; }
+      serverError(res, message);
+    }
+  },
+
+  async verifyPasswordOtp(req: Request, res: Response): Promise<void> {
+    try {
+      const { identifier, otp } = req.body as { identifier?: string; otp?: string };
+      if (!identifier || !otp) { badRequest(res, 'identifier and otp required'); return; }
+      ok(res, await authService.verifyPasswordOtp(identifier, otp));
+    } catch (e) {
+      const message = (e as Error).message;
+      if (message === OTP_DISABLED) { notFound(res, message); return; }
+      if (message === INVALID_OTP)  { badRequest(res, message); return; }
+      serverError(res, message);
+    }
+  },
+
+  async forgotUsername(req: Request, res: Response): Promise<void> {
+    try {
+      const { email } = req.body as { email?: string };
+      if (!email || !EMAIL_RE.test(email)) { badRequest(res, 'a valid email is required'); return; }
+      ok(res, await authService.forgotUsername(email));
+    } catch (e) {
+      const message = (e as Error).message;
+      if (message === OTP_DISABLED) { notFound(res, message); return; }
       serverError(res, message);
     }
   },

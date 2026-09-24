@@ -1,16 +1,58 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { randomUUID, randomBytes, createHash } from 'crypto';
+import { randomUUID, randomBytes, randomInt, createHash, createHmac, timingSafeEqual } from 'crypto';
 import { query, queryOne, execute } from '../../config/db';
 import { env } from '../../config/env';
 import { MIN_PASSWORD_LENGTH, PASSWORD_TOO_SHORT } from '../../config/constants';
 import type { User, UserRole } from '../../types';
 import { mapProfile } from '../../utils/mappers';
-import { isMailConfigured, sendPasswordResetEmail, sendWelcomeEmail } from '../../utils/mailer';
+import {
+  isMailConfigured, sendPasswordResetEmail, sendWelcomeEmail,
+  sendPasswordResetOtpEmail, sendUsernameReminderEmail,
+} from '../../utils/mailer';
 import { invalidateProfileCache } from '../../middleware/auth';
 
 // Password-reset tokens expire after one hour.
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000;
+// Email OTPs (feature-gated) are short-lived and allow a few guesses only.
+const OTP_TTL_MINUTES = 10;
+const OTP_MAX_ATTEMPTS = 5;
+
+export const NOT_STORE_OWNER = 'You can only link a store you own';
+export const OTP_DISABLED = 'Email OTP recovery is not enabled';
+export const INVALID_OTP  = 'Invalid or expired code';
+
+/**
+ * Profile row for a sign-in / recovery identifier: an email when it contains
+ * '@', otherwise a store login ID (username, case-insensitive).
+ */
+async function findByIdentifier(identifier: string): Promise<Record<string, unknown> | null> {
+  const id = identifier.toLowerCase().trim();
+  return id.includes('@')
+    ? queryOne('SELECT * FROM profiles WHERE email = $1 LIMIT 1', [id])
+    : queryOne('SELECT * FROM profiles WHERE LOWER(username) = $1 LIMIT 1', [id]);
+}
+
+// OTPs are 6 digits, so a plain hash is trivially reversible — key it with the
+// server secret and bind it to the user.
+function hashOtp(userId: string, otp: string): string {
+  return createHmac('sha256', env.jwtSecret).update(`${userId}:${otp}`).digest('hex');
+}
+
+/** Create a single-use reset-link token for a user (replaces any unused one). */
+async function issueResetToken(userId: string): Promise<string> {
+  const token     = randomBytes(32).toString('hex');
+  const tokenHash = createHash('sha256').update(token).digest('hex');
+  const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS);
+
+  // Only one active reset request at a time per user.
+  await execute(`DELETE FROM password_resets WHERE user_id = $1 AND used = false AND kind = 'link'`, [userId]);
+  await execute(
+    `INSERT INTO password_resets (user_id, token_hash, expires_at, kind) VALUES ($1, $2, $3, 'link')`,
+    [userId, tokenHash, expiresAt],
+  );
+  return token;
+}
 
 function signAccess(id: string, role: string, email: string): string {
   return jwt.sign({ id, role, email }, env.jwtSecret, { expiresIn: env.jwtExpiresIn } as jwt.SignOptions);
@@ -26,11 +68,9 @@ function signRefresh(id: string): string {
 }
 
 export const authService = {
-  async signIn(email: string, password: string): Promise<{ user: User; accessToken: string; refreshToken: string }> {
-    const row = await queryOne<Record<string, unknown>>(
-      'SELECT * FROM profiles WHERE email = $1 LIMIT 1',
-      [email.toLowerCase().trim()],
-    );
+  /** `identifier` is the account email or, for store accounts, the User ID. */
+  async signIn(identifier: string, password: string): Promise<{ user: User; accessToken: string; refreshToken: string }> {
+    const row = await findByIdentifier(identifier);
     if (!row) throw new Error('Invalid email or password');
 
     const valid = await bcrypt.compare(password, row.password_hash as string);
@@ -91,6 +131,7 @@ export const authService = {
     password: string;
     name: string;
     role: UserRole;
+    username?: string;
     phone?: string;
     city?: string;
     state?: string;
@@ -103,6 +144,10 @@ export const authService = {
   }): Promise<{ userId: string }> {
     const existing = await queryOne('SELECT id FROM profiles WHERE email = $1', [opts.email.toLowerCase().trim()]);
     if (existing) throw new Error('Email already registered');
+    if (opts.username) {
+      const taken = await queryOne('SELECT id FROM profiles WHERE LOWER(username) = LOWER($1)', [opts.username.trim()]);
+      if (taken) throw new Error('User ID already taken');
+    }
 
     const passwordHash = await bcrypt.hash(opts.password, 12);
     const userId = randomUUID();
@@ -110,12 +155,13 @@ export const authService = {
     await execute(
       `INSERT INTO profiles
          (id, name, email, password_hash, role, phone, city, state,
-          date_of_birth, gender, address_line1, address_line2, landmark, pin_code)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+          date_of_birth, gender, address_line1, address_line2, landmark, pin_code, username)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
       [userId, opts.name, opts.email.toLowerCase().trim(), passwordHash, opts.role,
        opts.phone ?? null, opts.city ?? null, opts.state ?? null,
        opts.dateOfBirth ?? null, opts.gender ?? null, opts.addressLine1 ?? null,
-       opts.addressLine2 ?? null, opts.landmark ?? null, opts.pinCode ?? null],
+       opts.addressLine2 ?? null, opts.landmark ?? null, opts.pinCode ?? null,
+       opts.username?.trim() || null],
     );
     await execute('INSERT INTO wallets (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING', [userId]);
 
@@ -162,7 +208,16 @@ export const authService = {
     if (patch.city    !== undefined) { fields.push(`city = $${idx++}`);       values.push(patch.city); }
     if (patch.state   !== undefined) { fields.push(`state = $${idx++}`);      values.push(patch.state); }
     if (patch.avatar  !== undefined) { fields.push(`avatar_url = $${idx++}`); values.push(patch.avatar); }
-    if (patch.storeId !== undefined) { fields.push(`store_id = $${idx++}`);   values.push(patch.storeId); }
+    if (patch.storeId !== undefined) {
+      // store_id scopes every store API (orders, products…), so a user may only
+      // point it at a store they own — never at someone else's store.
+      if (patch.storeId) {
+        const owned = await queryOne('SELECT id FROM stores WHERE id = $1 AND owner_id = $2', [patch.storeId, userId]);
+        if (!owned) throw new Error(NOT_STORE_OWNER);
+      }
+      fields.push(`store_id = $${idx++}`);
+      values.push(patch.storeId || null);
+    }
 
     if (fields.length === 0) return;
     values.push(userId);
@@ -196,17 +251,7 @@ export const authService = {
     const emailSent = isMailConfigured();
     if (!row) return { message, emailSent };
 
-    const token     = randomBytes(32).toString('hex');
-    const tokenHash = createHash('sha256').update(token).digest('hex');
-    const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS);
-
-    // Only one active reset request at a time per user.
-    await execute('DELETE FROM password_resets WHERE user_id = $1 AND used = false', [row.id]);
-    await execute(
-      'INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
-      [row.id, tokenHash, expiresAt],
-    );
-
+    const token = await issueResetToken(row.id);
     const resetLink = `${env.frontendUrl}/reset-password?token=${token}`;
     const delivered = await sendPasswordResetEmail(normalized, resetLink);
 
@@ -229,7 +274,7 @@ export const authService = {
     const tokenHash = createHash('sha256').update(token).digest('hex');
     const row = await queryOne<{ id: string; user_id: string }>(
       `SELECT id, user_id FROM password_resets
-       WHERE token_hash = $1 AND used = false AND expires_at > NOW()`,
+       WHERE token_hash = $1 AND used = false AND expires_at > NOW() AND kind = 'link'`,
       [tokenHash],
     );
     if (!row) throw new Error('Invalid or expired reset token');
@@ -244,5 +289,81 @@ export const authService = {
     // Revoke all active sessions for the user.
     await execute('DELETE FROM refresh_tokens WHERE user_id = $1', [row.user_id]);
     invalidateProfileCache(row.user_id);
+  },
+
+  // ── Email-OTP recovery (final stage — gated by PASSWORD_RESET_OTP_ENABLED) ──
+
+  recoveryOptions(): { otpEnabled: boolean } {
+    return { otpEnabled: env.passwordResetOtpEnabled };
+  },
+
+  /** Email a 6-digit reset code. Generic response — never reveals whether the account exists. */
+  async requestPasswordOtp(identifier: string): Promise<{ message: string; emailSent: boolean; devOtp?: string }> {
+    if (!env.passwordResetOtpEnabled) throw new Error(OTP_DISABLED);
+
+    const message = 'If an account exists, a verification code has been sent to its email.';
+    const emailSent = isMailConfigured();
+    const row = await findByIdentifier(identifier);
+    if (!row) return { message, emailSent };
+
+    const userId = String(row.id);
+    const otp = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    await execute(`DELETE FROM password_resets WHERE user_id = $1 AND used = false AND kind = 'otp'`, [userId]);
+    await execute(
+      `INSERT INTO password_resets (user_id, token_hash, expires_at, kind) VALUES ($1, $2, $3, 'otp')`,
+      [userId, hashOtp(userId, otp), new Date(Date.now() + OTP_TTL_MINUTES * 60_000)],
+    );
+
+    const delivered = await sendPasswordResetOtpEmail(String(row.email), otp, OTP_TTL_MINUTES);
+    // Same dev escape hatch as the reset link: surface the code only outside production.
+    const devOtp = !delivered && env.nodeEnv !== 'production' ? otp : undefined;
+    return { message, emailSent, ...(devOtp ? { devOtp } : {}) };
+  },
+
+  /**
+   * Check a reset code. On success returns a normal reset-link token, so the
+   * existing POST /auth/reset-password completes the flow unchanged.
+   */
+  async verifyPasswordOtp(identifier: string, otp: string): Promise<{ resetToken: string }> {
+    if (!env.passwordResetOtpEnabled) throw new Error(OTP_DISABLED);
+
+    const user = await findByIdentifier(identifier);
+    if (!user) throw new Error(INVALID_OTP);
+    const userId = String(user.id);
+
+    const row = await queryOne<{ id: string; token_hash: string; attempts: number }>(
+      `SELECT id, token_hash, attempts FROM password_resets
+       WHERE user_id = $1 AND kind = 'otp' AND used = false AND expires_at > NOW()
+       ORDER BY created_at DESC LIMIT 1`,
+      [userId],
+    );
+    if (!row || row.attempts >= OTP_MAX_ATTEMPTS) throw new Error(INVALID_OTP);
+
+    const expected = Buffer.from(row.token_hash, 'hex');
+    const actual   = Buffer.from(hashOtp(userId, String(otp).trim()), 'hex');
+    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+      // Burn the code once it has taken too many guesses.
+      await execute(
+        `UPDATE password_resets SET attempts = attempts + 1, used = (attempts + 1 >= $2) WHERE id = $1`,
+        [row.id, OTP_MAX_ATTEMPTS],
+      );
+      throw new Error(INVALID_OTP);
+    }
+
+    await execute('UPDATE password_resets SET used = true WHERE id = $1', [row.id]);
+    return { resetToken: await issueResetToken(userId) };
+  },
+
+  /** Email the account's User ID (store logins). Generic response. */
+  async forgotUsername(email: string): Promise<{ message: string; emailSent: boolean }> {
+    if (!env.passwordResetOtpEnabled) throw new Error(OTP_DISABLED);
+
+    const message = 'If an account with a User ID exists for that email, the User ID has been sent to it.';
+    const row = await queryOne<{ email: string; username: string | null }>(
+      'SELECT email, username FROM profiles WHERE email = $1',
+      [email.toLowerCase().trim()],
+    );
+    if (row?.username) await sendUsernameReminderEmail(row.email, row.username);
+    return { message, emailSent: isMailConfigured() };
   },
 };

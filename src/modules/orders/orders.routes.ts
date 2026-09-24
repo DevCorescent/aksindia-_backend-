@@ -21,7 +21,8 @@ const router = Router();
  *     description: >-
  *       Results are role-scoped: a customer sees only their own orders,
  *       a store_owner sees orders for their store, an agent sees orders tied
- *       to their agent id. Admins (and any other role) see all orders.
+ *       to their agent id, a delivery_partner sees the fulfilment queue.
+ *       Admins see all orders; any other role sees none.
  *       Ordered by creation date, newest first.
  *     responses:
  *       200: { description: List of orders }
@@ -43,9 +44,28 @@ router.get('/',             authenticate, ordersController.list);
  *     responses:
  *       200: { description: The requested order }
  *       401: { description: Missing/invalid token }
- *       500: { description: Order not found }
+ *       404: { description: Order not found or not accessible to the caller }
  */
 router.get('/:id',          authenticate, ordersController.getById);
+/**
+ * @openapi
+ * /orders/{id}/tracking:
+ *   get:
+ *     tags: [Orders]
+ *     summary: Order with its status timeline
+ *     description: >-
+ *       Same access rules as GET /orders/{id}. The timeline comes from
+ *       order_status_history (oldest first).
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: "{ order, timeline: [{ status, at, note? }] }" }
+ *       404: { description: Order not found or not accessible to the caller }
+ */
+router.get('/:id/tracking', authenticate, ordersController.tracking);
 /**
  * @openapi
  * /orders:
@@ -105,9 +125,13 @@ router.post('/',            authenticate, ordersController.create);
  *     tags: [Orders]
  *     summary: Update an order
  *     description: >-
- *       Admin or store_owner only. Applies any supplied fields. When status
- *       transitions to `delivered` and paymentStatus is `paid`, the store and
- *       any referring agent wallets are credited.
+ *       Admin, store_owner (own store's orders) or delivery_partner. Non-admins
+ *       may only send status / trackingNumber / courierName / cancelReason, and
+ *       status must follow the allowed flow (store: pending → processing →
+ *       shipped → delivered, cancel before dispatch; delivery partner:
+ *       processing → shipped → delivered). When status transitions to
+ *       `delivered` and paymentStatus is `paid`, the store and any referring
+ *       agent wallets are credited.
  *     parameters:
  *       - in: path
  *         name: id
@@ -130,8 +154,8 @@ router.post('/',            authenticate, ordersController.create);
  *     responses:
  *       200: { description: Updated order }
  *       401: { description: Missing/invalid token }
- *       403: { description: Not an admin or store_owner }
- *       500: { description: Order not found }
+ *       403: { description: Role not allowed, or invalid status transition }
+ *       404: { description: Order not found or not accessible to the caller }
  */
 router.patch('/:id',        authenticate, requireRole('admin', 'store_owner', 'delivery_partner'), ordersController.update);
 /**
@@ -141,8 +165,9 @@ router.patch('/:id',        authenticate, requireRole('admin', 'store_owner', 'd
  *     tags: [Orders]
  *     summary: Cancel an order
  *     description: >-
- *       Marks the order cancelled with the supplied reason. Fails if the order
- *       is already delivered or cancelled.
+ *       Marks the order cancelled with the supplied reason. Admin, the ordering
+ *       customer, or the order's store (before dispatch) only. Fails if the
+ *       order is already delivered or cancelled.
  *     parameters:
  *       - in: path
  *         name: id

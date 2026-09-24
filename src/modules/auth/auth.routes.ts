@@ -17,8 +17,10 @@ const router = Router();
  * /auth/signin:
  *   post:
  *     tags: [Auth]
- *     summary: Sign in with email and password
- *     description: Returns the authenticated user together with access and refresh tokens.
+ *     summary: Sign in with email (or store User ID) and password
+ *     description: >-
+ *       Returns the authenticated user together with access and refresh tokens.
+ *       `email` may hold a store account's User ID instead of an email.
  *     requestBody:
  *       required: true
  *       content:
@@ -27,7 +29,7 @@ const router = Router();
  *             type: object
  *             required: [email, password]
  *             properties:
- *               email:    { type: string, format: email }
+ *               email:    { type: string, description: Email or store User ID }
  *               password: { type: string }
  *     responses:
  *       200: { description: Signed in }
@@ -130,6 +132,88 @@ router.post('/reset-password',            passwordResetLimiter, authController.r
  *       400: { description: refreshToken required }
  *       401: { description: Invalid or expired refresh token }
  */
+/**
+ * @openapi
+ * /auth/recovery-options:
+ *   get:
+ *     tags: [Auth]
+ *     summary: Which account-recovery flows are enabled
+ *     security: []
+ *     responses:
+ *       200: { description: "{ otpEnabled: boolean }" }
+ */
+router.get('/recovery-options',           authController.recoveryOptions);
+/**
+ * @openapi
+ * /auth/forgot-password/otp:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Email a 6-digit password reset code (feature-gated)
+ *     description: >-
+ *       Only when PASSWORD_RESET_OTP_ENABLED=true; otherwise 404. Accepts an
+ *       email or a store User ID. Generic response for unknown accounts.
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [identifier]
+ *             properties:
+ *               identifier: { type: string }
+ *     responses:
+ *       200: { description: Code sent if the account exists }
+ *       404: { description: OTP recovery not enabled }
+ */
+router.post('/forgot-password/otp',       passwordResetLimiter, authController.requestPasswordOtp);
+/**
+ * @openapi
+ * /auth/forgot-password/verify-otp:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Exchange a valid reset code for a reset token (feature-gated)
+ *     description: >-
+ *       Returns { resetToken } for POST /auth/reset-password. Five wrong
+ *       guesses burn the code.
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [identifier, otp]
+ *             properties:
+ *               identifier: { type: string }
+ *               otp:        { type: string }
+ *     responses:
+ *       200: { description: "{ resetToken }" }
+ *       400: { description: Invalid or expired code }
+ *       404: { description: OTP recovery not enabled }
+ */
+router.post('/forgot-password/verify-otp', passwordResetLimiter, authController.verifyPasswordOtp);
+/**
+ * @openapi
+ * /auth/forgot-username:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Email the account's User ID (feature-gated)
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email]
+ *             properties:
+ *               email: { type: string }
+ *     responses:
+ *       200: { description: Sent if the account has a User ID }
+ *       404: { description: OTP recovery not enabled }
+ */
+router.post('/forgot-username',           passwordResetLimiter, authController.forgotUsername);
 router.post('/refresh',                   authController.refresh);
 
 /**

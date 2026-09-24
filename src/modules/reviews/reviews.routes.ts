@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { reviewsController } from './reviews.controller';
 import { authenticate } from '../../middleware/auth';
+import { requireRole } from '../../middleware/requireRole';
 
 const router = Router();
 
 router.post('/',                          authenticate, reviewsController.create);
 router.get('/mine',                       authenticate, reviewsController.getMine);
+router.get('/received',                   authenticate, requireRole('store_owner', 'service_provider'), reviewsController.getReceived);
 router.get('/product/:productId',                       reviewsController.getByProduct);
 router.get('/store/:storeId',                           reviewsController.getByStore);
 router.get('/order/:orderId',             authenticate, reviewsController.getByOrder);

@@ -1,7 +1,44 @@
-import { query, queryOne, execute } from '../../config/db';
+import { pool, query, queryOne, execute } from '../../config/db';
 import type { Store } from '../../types';
 import { mapStore } from '../../utils/mappers';
 import { invalidateProfileCache } from '../../middleware/auth';
+import { authService } from '../auth/auth.service';
+
+/** Login credentials an admin assigns to a store / service store. */
+export interface StoreOwnerAccount {
+  name: string;
+  email: string;
+  username: string;
+  password: string;
+}
+
+export const STORE_HAS_OWNER = 'This store already has its own login';
+export const SLUG_TAKEN      = 'Store URL (slug) already taken';
+
+/** A product store's login is a store_owner; a service store's is a service_provider. */
+function ownerRole(storeType?: Store['storeType']) {
+  return storeType === 'service' ? 'service_provider' as const : 'store_owner' as const;
+}
+
+async function createOwnerProfile(account: StoreOwnerAccount, store: Pick<Store, 'storeType' | 'city' | 'state' | 'contactPhone'>): Promise<string> {
+  const { userId } = await authService.signUp({
+    email:    account.email,
+    password: account.password,
+    name:     account.name,
+    username: account.username,
+    role:     ownerRole(store.storeType),
+    phone:    store.contactPhone,
+    city:     store.city,
+    state:    store.state,
+  });
+  return userId;
+}
+
+/** Undo a just-created login when the store step fails (wallet cascades). */
+async function dropProfile(userId: string): Promise<void> {
+  await execute('DELETE FROM profiles WHERE id = $1', [userId]).catch(err =>
+    console.error(`[stores] could not roll back profile ${userId}:`, (err as Error).message));
+}
 
 export const storesService = {
   async list(statusFilter?: string, ownerId?: string): Promise<Store[]> {
@@ -139,6 +176,64 @@ export const storesService = {
       values,
     );
     if (!row) throw new Error('Store not found');
+    return mapStore(row);
+  },
+
+  /**
+   * Admin flow: create the store together with its own login, so the store
+   * signs in as itself instead of being owned by the admin who created it.
+   */
+  async createWithOwnerAccount(
+    payload: Omit<Store, 'id' | 'createdAt' | 'totalSales' | 'totalOrders' | 'walletBalance'>,
+    account: StoreOwnerAccount,
+  ): Promise<Store> {
+    const slugTaken = await queryOne('SELECT id FROM stores WHERE slug = $1', [payload.slug]);
+    if (slugTaken) throw new Error(SLUG_TAKEN);
+
+    const userId = await createOwnerProfile(account, payload);
+    try {
+      return await this.create({ ...payload, ownerId: userId, ownerName: account.name });
+    } catch (e) {
+      await dropProfile(userId);
+      throw e;
+    }
+  },
+
+  /**
+   * Admin flow for stores created before store logins existed: they are owned
+   * by the admin account. Give such a store its own login and hand it over.
+   * Refuses stores that already belong to a real owner.
+   */
+  async assignOwnerAccount(storeId: string, account: StoreOwnerAccount): Promise<Store> {
+    const store = await this.getById(storeId);
+    const owner = await queryOne<{ role: string }>('SELECT role FROM profiles WHERE id = $1', [store.ownerId]);
+    if (owner && owner.role !== 'admin') throw new Error(STORE_HAS_OWNER);
+
+    const userId = await createOwnerProfile(account, store);
+    // One transaction for the handover: if any step fails nothing changed, so
+    // dropping the new profile cannot cascade into the store (owner_id FK).
+    const client = await pool.connect();
+    let row: Record<string, unknown> | undefined;
+    try {
+      await client.query('BEGIN');
+      ({ rows: [row] } = await client.query(
+        'UPDATE stores SET owner_id = $1, owner_name = $2, updated_at = NOW() WHERE id = $3 RETURNING *',
+        [userId, account.name, storeId],
+      ));
+      if (!row) throw new Error('Store not found');
+      await client.query('UPDATE profiles SET store_id = $1 WHERE id = $2', [storeId, userId]);
+      // The admin no longer fronts this store.
+      await client.query('UPDATE profiles SET store_id = NULL WHERE id = $1 AND store_id = $2', [store.ownerId, storeId]);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      await dropProfile(userId);
+      throw e;
+    } finally {
+      client.release();
+    }
+    invalidateProfileCache(userId);
+    invalidateProfileCache(store.ownerId);
     return mapStore(row);
   },
 };
