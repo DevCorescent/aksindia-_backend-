@@ -24,6 +24,12 @@ export const INVALID_OTP  = 'Invalid or expired code';
 export const INVALID_CREDENTIALS = 'Invalid email/User ID or password';
 export const ACCOUNT_DEACTIVATED = 'Your account has been deactivated. Please contact support.';
 
+// bcrypt hash of a throwaway value (cost 12, like real accounts). Checking a
+// password against it when no account matches makes an unknown email/User ID
+// take as long as a wrong password, so response times don't reveal which
+// accounts exist.
+const TIMING_HASH = '$2a$12$B5CB9uHtUUsX2Xaf/5QcMuZ2Iu/vSbhOK4GSZrl7EWAYjD/01rav6';
+
 /**
  * Profile row for a sign-in / recovery identifier: an email when it contains
  * '@', otherwise a store login ID (username, case-insensitive).
@@ -73,7 +79,10 @@ export const authService = {
   /** `identifier` is the account email or, for store accounts, the User ID. */
   async signIn(identifier: string, password: string): Promise<{ user: User; accessToken: string; refreshToken: string }> {
     const row = await findByIdentifier(identifier);
-    if (!row) throw new Error(INVALID_CREDENTIALS);
+    if (!row) {
+      await bcrypt.compare(password, TIMING_HASH);
+      throw new Error(INVALID_CREDENTIALS);
+    }
 
     const valid = await bcrypt.compare(password, row.password_hash as string);
     if (!valid) throw new Error(INVALID_CREDENTIALS);

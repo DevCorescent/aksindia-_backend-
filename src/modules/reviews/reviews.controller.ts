@@ -3,6 +3,7 @@ import { reviewsService } from './reviews.service';
 import { ok, badRequest, forbidden, notFound, serverError } from '../../utils/response';
 
 const MAX_REVIEW_LENGTH = 2000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const reviewsController = {
   async create(req: Request, res: Response): Promise<void> {
@@ -58,6 +59,9 @@ export const reviewsController = {
 
   async getByProduct(req: Request, res: Response): Promise<void> {
     try {
+      // Not a real product id (e.g. a built-in demo item): it has no reviews.
+      // Answer like any unreviewed product rather than sending it to a UUID column.
+      if (!UUID_RE.test(req.params.productId)) { ok(res, { reviews: [], avgRating: 0, count: 0 }); return; }
       const reviews = await reviewsService.getByProduct(req.params.productId);
       const stats   = await reviewsService.productStats(req.params.productId);
       ok(res, { reviews, ...stats });

@@ -27,8 +27,11 @@ export const authController = {
   async signIn(req: Request, res: Response): Promise<void> {
     try {
       // `email` may also carry a store User ID; `identifier` is accepted as an alias.
-      const { email, identifier, password } = req.body as { email?: string; identifier?: string; password?: string };
-      const login = identifier ?? email;
+      // Only non-empty strings count: anything else is a bad request, never a 500.
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const text = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+      const login = text(body.identifier) || text(body.email);
+      const password = typeof body.password === 'string' ? body.password : '';
       if (!login || !password) { badRequest(res, 'email (or User ID) and password required'); return; }
       const result = await authService.signIn(login, password);
       ok(res, result);

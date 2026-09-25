@@ -57,6 +57,25 @@ const adminLogin = await login('admin@test.io', 'AdminPass123');
 check('admin login', adminLogin.status === 200 && adminLogin.data.user.role === 'admin');
 const ADMIN = adminLogin.data.accessToken;
 check('invalid credentials rejected (401)', (await login('admin@test.io', 'wrong-pass')).status === 401);
+// Sign-in input handling: bad input is a 400, never a 500.
+const rawSignin = async (body) => {
+  const r = await fetch(BASE + '/auth/signin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+  return { status: r.status, error: (await r.json().catch(() => ({}))).error };
+};
+for (const [name, body] of [
+  ['email as number', { email: 12345, password: 'x' }], ['email as object', { email: { a: 1 }, password: 'x' }],
+  ['password as number', { email: 'admin@test.io', password: 12345 }], ['password as array', { email: 'admin@test.io', password: ['a'] }],
+  ['whitespace-only email', { email: '   ', password: 'x' }], ['no body', undefined],
+]) {
+  check(`sign-in 400: ${name}`, (await rawSignin(body === undefined ? undefined : JSON.stringify(body))).status === 400);
+}
+const badJson = await rawSignin('{bad json');
+check('sign-in 400 on malformed JSON (no parser message leaked)', badJson.status === 400 && badJson.error === 'Request body is not valid JSON', JSON.stringify(badJson));
+check('empty identifier falls back to email', (await call('POST', '/auth/signin', { identifier: '', email: 'admin@test.io', password: 'AdminPass123' })).status === 200);
+check('email is trimmed and case-insensitive', (await call('POST', '/auth/signin', { email: '  ADMIN@Test.io ', password: 'AdminPass123' })).status === 200);
+const median = async (body) => { const t = []; for (let i = 0; i < 5; i++) { const s0 = Date.now(); await call('POST', '/auth/signin', body); t.push(Date.now() - s0); } return t.sort((a, b) => a - b)[2]; };
+const tUnknown = await median({ email: 'nobody@test.io', password: 'whatever1' }), tWrong = await median({ email: 'admin@test.io', password: 'wrong-pass' });
+check(`unknown account takes as long as a wrong password (${tUnknown}ms vs ${tWrong}ms)`, tUnknown >= tWrong * 0.5, `${tUnknown} vs ${tWrong}`);
 check('unknown User ID rejected (401)', (await login('nobody_here', 'whatever1')).status === 401);
 
 for (const c of ['a', 'b']) {
@@ -146,6 +165,31 @@ check('customer creates order', o1.status === 201, o1.error);
 const O1 = o1.data.id;
 check('order forced to caller + pending (no self-delivered orders)', o1.data.customerId === CA_ID && o1.data.status === 'pending');
 
+// Cart items must be real products: nothing is written for a demo id, and an
+// order and its stock updates commit together.
+const ordersCount = () => Number(sql(`select count(*) from orders`));
+const stockOf = (id) => sql(`select stock||'/'||sold from products where id='${id}'`);
+const stockBefore = stockOf(productId), countBefore = ordersCount();
+const demoItem = { productId: 'demo_p1', productName: 'Wireless Bluetooth Earbuds', productIcon: '🎧', productColor: '#000', quantity: 1, price: 1299, commission: 10 };
+const demo = await call('POST', '/orders', orderBody({ items: [orderBody().items[0], demoItem] }), CA);
+check('A. checkout with demo_p1 → 400 with a clear message', demo.status === 400 && demo.error === 'Some items in your cart are no longer available.', `${demo.status} ${demo.error}`);
+check('A. no order (items live in orders.items) and no stock change after the 400', ordersCount() === countBefore && stockOf(productId) === stockBefore);
+const real = await call('POST', '/orders', orderBody(), CA);
+check('B. checkout with a real product UUID → 201, stock decremented', real.status === 201 && ordersCount() === countBefore + 1
+  && stockOf(productId) === `${Number(stockBefore.split('/')[0]) - 1}/${Number(stockBefore.split('/')[1]) + 1}`, `${real.status} ${real.error ?? ''}`);
+const failingProduct = sql(`insert into products (store_id,name,price,stock,status) values ('${STORE_A}','Stock Fails',100,5,'active') returning id`).split('\n')[0];
+sql(`create or replace function test_fail_stock() returns trigger language plpgsql as $$ begin raise exception 'simulated stock failure'; end $$`);
+sql(`create trigger test_fail_stock before update on products for each row when (old.id = '${failingProduct}') execute function test_fail_stock()`);
+const countMid = ordersCount(), stockMid = stockOf(productId);
+const failed = await call('POST', '/orders', orderBody({ items: [{ ...orderBody().items[0] }, { ...orderBody().items[0], productId: failingProduct }] }), CA);
+sql(`drop trigger test_fail_stock on products; drop function test_fail_stock()`);
+check('C. stock-update failure rolls back the whole order (no partial order, no partial stock)', failed.status === 500
+  && ordersCount() === countMid && stockOf(productId) === stockMid
+  && sql(`select stock from products where id='${failingProduct}'`) === '5', `${failed.status} ${failed.error ?? ''}`);
+const demoReviews = await call('GET', '/reviews/product/demo_p1');
+check('D. GET /reviews/product/demo_p1 → 200 with an empty list', demoReviews.status === 200
+  && JSON.stringify(demoReviews.data) === JSON.stringify({ reviews: [], avgRating: 0, count: 0 }), `${demoReviews.status} ${demoReviews.error ?? ''}`);
+
 check('store A sees the order', (await call('GET', '/orders', undefined, SA)).data.some(o => o.id === O1));
 check('store B does not see it in list', !(await call('GET', '/orders', undefined, SB)).data.some(o => o.id === O1));
 check('store B GET /orders/:id → 404', (await call('GET', `/orders/${O1}`, undefined, SB)).status === 404);
@@ -222,6 +266,9 @@ check('store cannot review', (await call('POST', '/reviews', { orderId: O1, prod
 check('product not in order rejected', (await call('POST', '/reviews', { orderId: O1, productId: '00000000-0000-0000-0000-0000000000b1', rating: 5 }, CA)).status === 400);
 const rv = await call('POST', '/reviews', { orderId: O1, productId, rating: 5, reviewText: 'Great' }, CA);
 check('customer reviews delivered order', rv.status === 200 && rv.data.storeId === STORE_A, rv.error);
+const realReviews = await call('GET', `/reviews/product/${productId}`);
+check('E. GET /reviews/product/<real UUID> unchanged (lists the review, rating and count)', realReviews.status === 200
+  && realReviews.data.reviews.some(r => r.orderId === O1) && realReviews.data.count >= 1 && realReviews.data.avgRating > 0);
 await call('POST', '/reviews', { orderId: O1, productId, rating: 4, reviewText: 'Edited' }, CA);
 check('re-submit updates, never duplicates', sql(`select count(*)||':'||max(rating) from reviews where order_id='${O1}'`) === '1:4');
 const recA = await call('GET', '/reviews/received', undefined, SA);

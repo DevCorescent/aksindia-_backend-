@@ -1,10 +1,13 @@
 import { query, queryOne, execute } from '../../config/db';
 import type { Order, UserRole } from '../../types';
 import { mapOrder } from '../../utils/mappers';
-import { walletsService } from '../wallets/wallets.service';
+import { walletsService, withTransaction } from '../wallets/wallets.service';
 import { orderHistoryService } from './order-history.service';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A cart item points at something that is not a real product (e.g. a built-in demo item). */
+export const ITEM_UNAVAILABLE = 'Some items in your cart are no longer available.';
 
 async function creditParties(order: Order): Promise<void> {
   const storeCredit = order.total - order.commissionTotal;
@@ -61,41 +64,54 @@ export const ordersService = {
   },
 
   async create(payload: Omit<Order, 'id'>): Promise<Order> {
+    // Item product ids are used against the UUID products table. Refuse anything
+    // else (such as the frontend's built-in demo items, "demo_p1") before a
+    // single row is written, instead of failing half-way through.
+    const items = (payload.items ?? []) as Array<{ productId?: string; quantity?: number }>;
+    if (items.some(item => item.productId && !UUID_RE.test(String(item.productId)))) {
+      throw new Error(ITEM_UNAVAILABLE);
+    }
+
     const orderId = 'ORD' + Date.now().toString(36).toUpperCase();
     const storeId = payload.storeId && UUID_RE.test(payload.storeId) ? payload.storeId : null;
-    const row = await queryOne(
-      `INSERT INTO orders
-        (id, customer_id, customer_name, customer_email, store_id, store_name, items,
-         subtotal, total, commission_total, admin_revenue, discount, shipping_charge, gst_amount,
-         status, payment_method, payment_status, address, city,
-         agent_id, agent_name, agent_code, agent_commission)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
-       RETURNING *`,
-      [
-        orderId, payload.customerId, payload.customerName, payload.customerEmail,
-        storeId, payload.storeName, JSON.stringify(payload.items),
-        payload.subtotal, payload.total, payload.commissionTotal, payload.adminRevenue,
-        payload.discount ?? 0, payload.shippingCharge ?? 0, payload.gstAmount ?? 0,
-        payload.status ?? 'pending', payload.paymentMethod ?? 'cod', payload.paymentStatus ?? 'pending',
-        payload.address, payload.city,
-        payload.agentId ?? null, payload.agentName ?? null,
-        payload.agentCode ?? null, payload.agentCommission ?? null,
-      ],
-    );
-    if (!row) throw new Error('Create failed');
-    const order = mapOrder(row);
-    await orderHistoryService.record(order.id, 'product', order.status, payload.customerId);
+    // The order and its stock decrements commit together or not at all, so a
+    // failure can never leave an order behind that the store would see.
+    const order = await withTransaction(async (client) => {
+      const { rows: [row] } = await client.query(
+        `INSERT INTO orders
+          (id, customer_id, customer_name, customer_email, store_id, store_name, items,
+           subtotal, total, commission_total, admin_revenue, discount, shipping_charge, gst_amount,
+           status, payment_method, payment_status, address, city,
+           agent_id, agent_name, agent_code, agent_commission)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+         RETURNING *`,
+        [
+          orderId, payload.customerId, payload.customerName, payload.customerEmail,
+          storeId, payload.storeName, JSON.stringify(payload.items),
+          payload.subtotal, payload.total, payload.commissionTotal, payload.adminRevenue,
+          payload.discount ?? 0, payload.shippingCharge ?? 0, payload.gstAmount ?? 0,
+          payload.status ?? 'pending', payload.paymentMethod ?? 'cod', payload.paymentStatus ?? 'pending',
+          payload.address, payload.city,
+          payload.agentId ?? null, payload.agentName ?? null,
+          payload.agentCode ?? null, payload.agentCommission ?? null,
+        ],
+      );
+      if (!row) throw new Error('Create failed');
 
-    // Decrement stock for each product item
-    const items = payload.items as Array<{ productId?: string; quantity?: number }>;
-    for (const item of items) {
-      if (item.productId && item.quantity) {
-        await execute(
-          'UPDATE products SET stock = GREATEST(stock - $1, 0), sold = sold + $1 WHERE id = $2',
-          [item.quantity, item.productId],
-        );
+      // Decrement stock for each product item
+      for (const item of items) {
+        if (item.productId && item.quantity) {
+          await client.query(
+            'UPDATE products SET stock = GREATEST(stock - $1, 0), sold = sold + $1 WHERE id = $2',
+            [item.quantity, item.productId],
+          );
+        }
       }
-    }
+      return mapOrder(row);
+    });
+
+    // Best-effort, as before: history never fails the order.
+    await orderHistoryService.record(order.id, 'product', order.status, payload.customerId);
 
     return order;
   },

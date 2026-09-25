@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { ordersService } from './orders.service';
+import { ordersService, ITEM_UNAVAILABLE } from './orders.service';
 import { orderHistoryService } from './order-history.service';
 import { canAccessOrder, productTransitionError, pick } from './order-access';
 import type { Order } from '../../types';
@@ -59,7 +59,11 @@ export const ordersController = {
       }
       const data = await ordersService.create(body);
       created(res, data);
-    } catch (e) { serverError(res, (e as Error).message); }
+    } catch (e) {
+      const message = (e as Error).message;
+      if (message === ITEM_UNAVAILABLE) { badRequest(res, message); return; }
+      serverError(res, message);
+    }
   },
 
   async update(req: Request, res: Response): Promise<void> {
