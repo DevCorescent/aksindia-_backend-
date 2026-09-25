@@ -8,7 +8,10 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "seed": "ts-node -e \"require('dotenv/config')\" src/db/seed.ts",
-    "test:api": "bash scripts/test/run-api-tests.sh"
+    "test:api": "bash scripts/test/run-api-tests.sh",
+    "db:migrate": "node scripts/db/run-migration.mjs",
+    "db:verify": "node scripts/db/verify-schema.mjs",
+    "test:migration": "bash scripts/test/run-migration-test.sh"
   },
   "dependencies": {
     "@types/multer": "^2.2.0",

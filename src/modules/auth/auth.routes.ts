@@ -34,7 +34,7 @@ const router = Router();
  *     responses:
  *       200: { description: Signed in }
  *       400: { description: email and password required }
- *       401: { description: Invalid email or password }
+ *       401: { description: Invalid email/User ID or password }
  */
 router.post('/signin',                    authController.signIn);
 

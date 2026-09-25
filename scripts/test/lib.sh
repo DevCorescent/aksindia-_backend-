@@ -10,6 +10,9 @@ TEST_API_PORT="${TEST_API_PORT:-5055}"
 TEST_STATE_DIR="${TEST_STATE_DIR:-${TMPDIR:-/tmp}/askindia-test-stack}"
 export TEST_DATABASE_URL="postgres://postgres@127.0.0.1:${TEST_PG_PORT}/askindia_test"
 export TEST_API_URL="http://127.0.0.1:${TEST_API_PORT}/api/v1"
+# Local SMTP sink (mail-sink.mjs): when running, the API mails into it.
+MAIL_SINK_PORT="${MAIL_SINK_PORT:-55025}"
+export MAIL_SINK_FILE="$TEST_STATE_DIR/mails.jsonl"
 
 # PostgreSQL binaries: PG_BIN, else PATH, else Homebrew's postgresql@17.
 if [[ -z "${PG_BIN:-}" ]]; then
@@ -44,8 +47,23 @@ migrate_and_seed() {
   tpsql -f "$BACKEND_DIR/src/db/schema.sql" >/dev/null 2>&1
 }
 
-# start_api [otp=false|true] — test-only secrets; SMTP and payment gateway
-# credentials are blanked so nothing leaves the machine.
+start_mail_sink() {
+  stop_mail_sink
+  : >"$MAIL_SINK_FILE"
+  MAIL_SINK_PORT="$MAIL_SINK_PORT" nohup node "$BACKEND_DIR/scripts/test/mail-sink.mjs" >"$TEST_STATE_DIR/mail-sink.log" 2>&1 &
+  echo $! >"$TEST_STATE_DIR/mail-sink.pid"
+  for _ in $(seq 1 20); do grep -q listening "$TEST_STATE_DIR/mail-sink.log" 2>/dev/null && return 0; sleep 0.25; done
+  echo "mail sink did not start" >&2; exit 1
+}
+
+stop_mail_sink() {
+  [[ -f "$TEST_STATE_DIR/mail-sink.pid" ]] && { kill "$(cat "$TEST_STATE_DIR/mail-sink.pid")" 2>/dev/null || true; rm -f "$TEST_STATE_DIR/mail-sink.pid"; }
+  lsof -ti:"$MAIL_SINK_PORT" 2>/dev/null | xargs kill 2>/dev/null || true
+}
+
+# start_api [otp=false|true|<any value>|__unset__] — test-only secrets; payment
+# gateway credentials are blanked, and mail goes to the local sink when it runs
+# (otherwise SMTP is blanked too), so nothing leaves the machine.
 start_api() {
   stop_api
   (
@@ -53,7 +71,11 @@ start_api() {
     export DATABASE_URL="$TEST_DATABASE_URL" PORT="$TEST_API_PORT" NODE_ENV=development
     export JWT_SECRET=regression-test-secret FRONTEND_URL=http://localhost:5173
     export SMTP_HOST= MAIL_FROM= CASHFREE_APP_ID= CASHFREE_SECRET_KEY= CASHFREE_WEBHOOK_SECRET= RAZORPAY_WEBHOOK_SECRET=
-    export PASSWORD_RESET_OTP_ENABLED="${1:-false}"
+    if [[ -f "$TEST_STATE_DIR/mail-sink.pid" ]]; then
+      export SMTP_HOST=127.0.0.1 SMTP_PORT="$MAIL_SINK_PORT" SMTP_USER= SMTP_SECURE=false MAIL_FROM=noreply@askindia.test
+    fi
+    if [[ "${1:-false}" == __unset__ ]]; then unset PASSWORD_RESET_OTP_ENABLED
+    else export PASSWORD_RESET_OTP_ENABLED="${1-false}"; fi
     nohup npx ts-node-dev --transpile-only src/server.ts >"$TEST_STATE_DIR/api.log" 2>&1 &
     echo $! >"$TEST_STATE_DIR/api.pid"
   )

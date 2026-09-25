@@ -5,6 +5,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 start_db
 migrate_and_seed
+start_mail_sink
 start_api false
 echo "TEST_API_URL=$TEST_API_URL"
 echo "TEST_DATABASE_URL=$TEST_DATABASE_URL"

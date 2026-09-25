@@ -21,6 +21,8 @@ const OTP_MAX_ATTEMPTS = 5;
 export const NOT_STORE_OWNER = 'You can only link a store you own';
 export const OTP_DISABLED = 'Email OTP recovery is not enabled';
 export const INVALID_OTP  = 'Invalid or expired code';
+export const INVALID_CREDENTIALS = 'Invalid email/User ID or password';
+export const ACCOUNT_DEACTIVATED = 'Your account has been deactivated. Please contact support.';
 
 /**
  * Profile row for a sign-in / recovery identifier: an email when it contains
@@ -71,12 +73,12 @@ export const authService = {
   /** `identifier` is the account email or, for store accounts, the User ID. */
   async signIn(identifier: string, password: string): Promise<{ user: User; accessToken: string; refreshToken: string }> {
     const row = await findByIdentifier(identifier);
-    if (!row) throw new Error('Invalid email or password');
+    if (!row) throw new Error(INVALID_CREDENTIALS);
 
     const valid = await bcrypt.compare(password, row.password_hash as string);
-    if (!valid) throw new Error('Invalid email or password');
+    if (!valid) throw new Error(INVALID_CREDENTIALS);
 
-    if (row.is_active === false) throw new Error('Your account has been deactivated. Please contact support.');
+    if (row.is_active === false) throw new Error(ACCOUNT_DEACTIVATED);
 
     const user = mapProfile(row);
     const accessToken  = signAccess(user.id, user.role, user.email);
@@ -291,14 +293,17 @@ export const authService = {
     invalidateProfileCache(row.user_id);
   },
 
-  // ── Email-OTP recovery (final stage — gated by PASSWORD_RESET_OTP_ENABLED) ──
+  // ── Email-OTP recovery (only when PASSWORD_RESET_OTP_ENABLED=true) ─────────
 
   recoveryOptions(): { otpEnabled: boolean } {
     return { otpEnabled: env.passwordResetOtpEnabled };
   },
 
-  /** Email a 6-digit reset code. Generic response — never reveals whether the account exists. */
-  async requestPasswordOtp(identifier: string): Promise<{ message: string; emailSent: boolean; devOtp?: string }> {
+  /**
+   * Email a 6-digit reset code. Generic response — never reveals whether the
+   * account exists, and never contains the code: email is the only channel.
+   */
+  async requestPasswordOtp(identifier: string): Promise<{ message: string; emailSent: boolean }> {
     if (!env.passwordResetOtpEnabled) throw new Error(OTP_DISABLED);
 
     const message = 'If an account exists, a verification code has been sent to its email.';
@@ -315,9 +320,8 @@ export const authService = {
     );
 
     const delivered = await sendPasswordResetOtpEmail(String(row.email), otp, OTP_TTL_MINUTES);
-    // Same dev escape hatch as the reset link: surface the code only outside production.
-    const devOtp = !delivered && env.nodeEnv !== 'production' ? otp : undefined;
-    return { message, emailSent, ...(devOtp ? { devOtp } : {}) };
+    if (!delivered) console.error(`[auth] password reset code for user ${userId} was NOT delivered — check SMTP_HOST/MAIL_FROM`);
+    return { message, emailSent };
   },
 
   /**
