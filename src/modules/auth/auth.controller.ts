@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { env } from '../../config/env';
-import { authService, NOT_STORE_OWNER, OTP_DISABLED, INVALID_OTP } from './auth.service';
+import { authService, NOT_STORE_OWNER, OTP_DISABLED, INVALID_OTP, INVALID_CREDENTIALS, ACCOUNT_DEACTIVATED } from './auth.service';
 import { ok, created, badRequest, unauthorized, forbidden, notFound, serverError } from '../../utils/response';
 import { MIN_PASSWORD_LENGTH, PASSWORD_TOO_SHORT } from '../../config/constants';
 
@@ -34,8 +34,12 @@ export const authController = {
       ok(res, result);
     } catch (e) {
       const message = (e as Error).message;
-      if (message === 'Invalid email or password') { unauthorized(res, message); return; }
-      serverError(res, message);
+      if (message === INVALID_CREDENTIALS) { unauthorized(res, message); return; }
+      if (message === ACCOUNT_DEACTIVATED) { forbidden(res, message); return; }
+      // Anything else is a server fault (e.g. a DB error) — log the cause, but
+      // never show SQL to the login screen.
+      console.error('[auth] sign-in failed:', message);
+      serverError(res, 'Sign-in failed due to a server error. Please try again.');
     }
   },
 

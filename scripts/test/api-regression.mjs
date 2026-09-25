@@ -5,7 +5,9 @@
 // PHASE=main      full suite (OTP disabled)            — default
 // PHASE=otp       email-OTP recovery flow (OTP enabled, fresh server)
 // PHASE=otp-burn  5-wrong-guesses burn + forgot User ID (OTP enabled, fresh server)
+// PHASE=accounts   account creation + every login type, verified in the DB
 import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 
 const BASE = process.env.TEST_API_URL;
 const DB   = process.env.TEST_DATABASE_URL;
@@ -36,6 +38,18 @@ const login = async (email, password) => (await call('POST', '/auth/signin', { e
 const RUN = Date.now().toString(36);
 const section = (t) => console.log(`\n${t}`);
 
+// Mail captured by the local SMTP sink (run-api-tests.sh starts it).
+const decodeQP = (t) => t.replace(/=\n/g, '').replace(/=([0-9A-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+function mailsTo(address, subject) {
+  const file = process.env.MAIL_SINK_FILE;
+  if (!file || !existsSync(file)) return [];
+  return readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l))
+    .filter(m => m.to.includes(address.toLowerCase()) && subject.test(m.data))
+    .map(m => decodeQP(m.data));
+}
+const otpFromMail = (address) => mailsTo(address, /Subject: Your AskIndia password reset code/).at(-1)?.match(/reset code is (\d{6})/)?.[1];
+const wrongCode = (code) => code === '000000' ? '111111' : '000000';
+
 if (PHASE === 'main') {
 // ── AUTH ────────────────────────────────────────────────────────────────────
 section('AUTH');
@@ -54,6 +68,13 @@ const custB = await login(`custb.${RUN}@test.io`, 'CustPass123');
 check('customer login', custA.status === 200 && custA.data.user.role === 'customer');
 const CA = custA.data.accessToken, CB = custB.data.accessToken;
 const CA_ID = custA.data.user.id;
+check('bad credentials get one generic message', (await login('admin@test.io', 'wrong-pass')).error === 'Invalid email/User ID or password');
+const custMe = await call('GET', '/auth/me', undefined, CA);
+check('customer /auth/me returns role', custMe.status === 200 && custMe.data.id === CA_ID && custMe.data.role === 'customer');
+const refreshed = await call('POST', '/auth/refresh', { refreshToken: custB.data.refreshToken });
+check('refresh token issues a working access token', refreshed.status === 200
+  && (await call('GET', '/auth/me', undefined, refreshed.data.accessToken)).data?.email === `custb.${RUN}@test.io`, refreshed.error);
+check('rotated refresh token cannot be reused', (await call('POST', '/auth/refresh', { refreshToken: custB.data.refreshToken })).status === 401);
 
 // ── ADMIN CREATES STORES WITH LOGINS ───────────────────────────────────────
 section('STORE ACCOUNTS');
@@ -81,6 +102,12 @@ check('store logs in with User ID', stALogin.status === 200 && stALogin.data.use
 check('store logs in with email too', (await login(`storea_${RUN}@test.io`, 'StorePass123')).status === 200);
 check('User ID login is case-insensitive', (await login(`STOREA_${RUN}`, 'StorePass123')).status === 200);
 const SA = stALogin.data.accessToken;
+const storeMe = await call('GET', '/auth/me', undefined, SA);
+check('store /auth/me returns role + store_id', storeMe.data?.role === 'store_owner' && storeMe.data.storeId === STORE_A && storeMe.data.username === `storea_${RUN}`);
+check('customer cannot call store APIs', (await call('GET', '/reviews/received', undefined, CA)).status === 403);
+const noLogin = await call('POST', '/stores', { name: 'Admin-owned', slug: `ao-${RUN}`, city: 'Pune' }, ADMIN);
+check('admin store without its own login leaves admin store_id untouched', noLogin.status === 201
+  && sql(`select coalesce(store_id::text,'') from profiles where id='${adminLogin.data.user.id}'`) === '', noLogin.error);
 const SB = (await login(`storeb_${RUN}`, 'StorePass123')).data.accessToken;
 
 check('store cannot call admin APIs', (await call('GET', '/admin/users', undefined, SA)).status === 403);
@@ -135,6 +162,21 @@ check('ACCEPTED → DISPATCHED ok', (await call('PATCH', `/orders/${O1}`, { stat
 check('DISPATCHED → DELIVERED ok', (await call('PATCH', `/orders/${O1}`, { status: 'delivered' }, SA)).data?.status === 'delivered');
 check('DELIVERED → PENDING rejected', (await call('PATCH', `/orders/${O1}`, { status: 'pending' }, SA)).status === 403);
 check('DELIVERED → CANCELLED rejected', (await call('PATCH', `/orders/${O1}`, { status: 'cancelled' }, SA)).status === 403);
+check('dispatch + delivery recorded in history, attributed to the store login', sql(
+  `select string_agg(status, '>' order by created_at) from order_status_history
+   where order_id='${O1}' and status in ('shipped','delivered') and changed_by='${sA.data.ownerId}'`) === 'shipped>delivered');
+
+// Customers cannot move their own order; store PATCH never reaches payment fields.
+const oc = (await call('POST', '/orders', orderBody(), CA)).data.id;
+check('customer cannot change order status (403)', (await call('PATCH', `/orders/${oc}`, { status: 'processing' }, CA)).status === 403
+  && (await call('PATCH', `/orders/${oc}`, { status: 'cancelled' }, CA)).status === 403
+  && sql(`select status from orders where id='${oc}'`) === 'pending');
+const payBefore = sql(`select payment_status||'|'||payment_method||'|'||total||'|'||coalesce(razorpay_payment_id,'') from orders where id='${oc}'`);
+const dispatchWithPayment = await call('PATCH', `/orders/${oc}`, { status: 'processing', paymentStatus: 'refunded', paymentMethod: 'card', total: 1, razorpayPaymentId: 'pay_forged' }, SA);
+check('store status update ignores every payment field', dispatchWithPayment.status === 200 && dispatchWithPayment.data.status === 'processing'
+  && sql(`select payment_status||'|'||payment_method||'|'||total||'|'||coalesce(razorpay_payment_id,'') from orders where id='${oc}'`) === payBefore, payBefore);
+const adminMove = await call('PATCH', `/orders/${oc}`, { status: 'pending' }, ADMIN);
+check('admin keeps unrestricted status changes (processing → pending)', adminMove.status === 200 && adminMove.data.status === 'pending', adminMove.error);
 const walletAfter = Number(sql(`select balance from wallets where user_id='${sA.data.ownerId}'`));
 check('existing wallet credit on paid+delivered still happens (to the store login)', walletAfter - walletBefore === 225, `${walletBefore} → ${walletAfter}`);
 
@@ -224,15 +266,22 @@ const o5 = (await call('POST', '/orders', orderBody({ paymentMethod: 'upi', paym
 const wh = await fetch(`${BASE}/payments/cashfree/webhook`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'PAYMENT_SUCCESS_WEBHOOK', data: { order: { order_id: o5, order_status: 'PAID', order_amount: 250 } }, event_time: 'now' }) });
 console.log(`  ℹ Cashfree success webhook → HTTP ${wh.status}: ${(await wh.json()).error ?? 'ok'}`);
 
-// ── FORGOT PASSWORD (existing link flow) & OTP GATE ────────────────────────
+// ── FORGOT PASSWORD (PASSWORD_RESET_OTP_ENABLED=false → reset-link flow) ───
 section('RECOVERY (OTP disabled)');
-console.log(`  ℹ otpEnabled=${(await call('GET', '/auth/recovery-options')).data?.otpEnabled}`);
-check('OTP endpoint 404 while disabled', (await call('POST', '/auth/forgot-password/otp', { identifier: `custa.${RUN}@test.io` })).status === 404);
-check('forgot-username 404 while disabled', (await call('POST', '/auth/forgot-username', { email: `custa.${RUN}@test.io` })).status === 404);
-const fp = await call('POST', '/auth/forgot-password', { email: `custa.${RUN}@test.io` });
-const token = new URL(fp.data.devResetLink).searchParams.get('token');
+const custAEmail = `custa.${RUN}@test.io`;
+check('recovery-options reports otpEnabled=false', (await call('GET', '/auth/recovery-options')).data?.otpEnabled === false);
+check('OTP endpoint 404 while disabled', (await call('POST', '/auth/forgot-password/otp', { identifier: custAEmail })).status === 404);
+check('OTP verify 404 while disabled', (await call('POST', '/auth/forgot-password/verify-otp', { identifier: custAEmail, otp: '123456' })).status === 404);
+check('forgot-username 404 while disabled', (await call('POST', '/auth/forgot-username', { email: custAEmail })).status === 404);
+check('no OTP email sent while disabled', mailsTo(custAEmail, /Subject: Your AskIndia password reset code/).length === 0);
+check('no OTP row created while disabled', sql(`select count(*) from password_resets r join profiles p on p.id=r.user_id where p.email='${custAEmail}' and r.kind='otp'`) === '0');
+const fp = await call('POST', '/auth/forgot-password', { email: custAEmail });
+const linkMail = mailsTo(custAEmail, /Subject: Reset your AskIndia password/).at(-1);
+check('reset link emailed', fp.status === 200 && fp.data.emailSent === true && !!linkMail, fp.error);
+const token = linkMail?.match(/reset-password\?token=([0-9a-f]{64})/)?.[1];
 check('existing reset-link flow still works', (await call('POST', '/auth/reset-password', { token, newPassword: 'NewCustPass1' })).status === 200);
-check('login with new password', (await login(`custa.${RUN}@test.io`, 'NewCustPass1')).status === 200);
+check('login with new password', (await login(custAEmail, 'NewCustPass1')).status === 200);
+check('reset link is single-use', (await call('POST', '/auth/reset-password', { token, newPassword: 'Another123' })).status === 400);
 } // end PHASE === 'main'
 
 // ── EMAIL-OTP RECOVERY (feature flag on) ───────────────────────────────────
@@ -251,24 +300,74 @@ if (PHASE === 'otp') {
   section('RECOVERY (OTP enabled)');
   check('recovery-options reports OTP enabled', (await call('GET', '/auth/recovery-options')).data?.otpEnabled === true);
   const user = await storeAccount('otp');
+  const email = `${user}@test.io`;
   const r = await call('POST', '/auth/forgot-password/otp', { identifier: user });
-  check('OTP issued (dev echo, no SMTP)', r.status === 200 && /^\d{6}$/.test(r.data?.devOtp ?? ''));
-  check('unknown account gets same generic response', (await call('POST', '/auth/forgot-password/otp', { identifier: 'nobody@x.io' })).data?.message === r.data.message);
-  check('wrong OTP rejected', (await call('POST', '/auth/forgot-password/verify-otp', { identifier: user, otp: r.data.devOtp === '000000' ? '111111' : '000000' })).status === 400);
-  const v = await call('POST', '/auth/forgot-password/verify-otp', { identifier: user, otp: r.data.devOtp });
-  check('correct OTP → reset token', v.status === 200 && !!v.data?.resetToken);
-  check('OTP single-use', (await call('POST', '/auth/forgot-password/verify-otp', { identifier: user, otp: r.data.devOtp })).status === 400);
-  check('reset via existing endpoint', (await call('POST', '/auth/reset-password', { token: v.data.resetToken, newPassword: 'ResetPass123' })).status === 200);
+  const code = otpFromMail(email);
+  check('OTP emailed to the registered address', r.status === 200 && /^\d{6}$/.test(code ?? ''), r.error);
+  check('OTP not in the API response', !!code && !JSON.stringify(r).includes(code) && Object.keys(r.data ?? {}).sort().join() === 'emailSent,message');
+  check('OTP stored only as a hash', sql(`select count(*) from password_resets r join profiles p on p.id=r.user_id
+    where p.username='${user}' and r.kind='otp' and length(r.token_hash)=64 and r.token_hash <> '${code}'`) === '1');
+  const unknown = await call('POST', '/auth/forgot-password/otp', { identifier: 'nobody@x.io' });
+  check('unknown account gets same generic response, no mail', unknown.data?.message === r.data.message && mailsTo('nobody@x.io', /./).length === 0);
+  check('wrong OTP rejected', (await call('POST', '/auth/forgot-password/verify-otp', { identifier: user, otp: wrongCode(code) })).status === 400);
+  const v = await call('POST', '/auth/forgot-password/verify-otp', { identifier: user, otp: code });
+  check('correct OTP → reset token', v.status === 200 && !!v.data?.resetToken, v.error);
+  check('OTP single-use', (await call('POST', '/auth/forgot-password/verify-otp', { identifier: user, otp: code })).status === 400);
+  check('reset via existing endpoint', (await call('POST', '/auth/reset-password', { token: v.data?.resetToken, newPassword: 'ResetPass123' })).status === 200);
   check('store logs in with new password', (await login(user, 'ResetPass123')).status === 200);
+
+  // Expiry: a fresh code whose 10 minutes have passed is refused.
+  await call('POST', '/auth/forgot-password/otp', { identifier: email });
+  const late = otpFromMail(email);
+  sql(`update password_resets set expires_at = now() - interval '1 minute' where kind='otp' and used=false
+       and user_id=(select id from profiles where username='${user}')`);
+  check('expired OTP rejected', !!late && late !== code
+    && (await call('POST', '/auth/forgot-password/verify-otp', { identifier: email, otp: late })).status === 400);
 }
 
 if (PHASE === 'otp-burn') {
   section('RECOVERY (OTP enabled — attempt limit)');
   const user = await storeAccount('burn');
-  const r = await call('POST', '/auth/forgot-password/otp', { identifier: user });
-  for (let i = 0; i < 5; i++) await call('POST', '/auth/forgot-password/verify-otp', { identifier: user, otp: 'xxxxxx' });
-  check('OTP burned after 5 wrong guesses', (await call('POST', '/auth/forgot-password/verify-otp', { identifier: user, otp: r.data.devOtp })).status === 400);
-  check('forgot-username responds', (await call('POST', '/auth/forgot-username', { email: `${user}@test.io` })).status === 200);
+  await call('POST', '/auth/forgot-password/otp', { identifier: user });
+  const code = otpFromMail(`${user}@test.io`);
+  for (let i = 0; i < 5; i++) await call('POST', '/auth/forgot-password/verify-otp', { identifier: user, otp: wrongCode(code) });
+  check('OTP burned after 5 wrong guesses (correct code refused)', !!code
+    && (await call('POST', '/auth/forgot-password/verify-otp', { identifier: user, otp: code })).status === 400);
+  check('forgot-username emails the User ID', (await call('POST', '/auth/forgot-username', { email: `${user}@test.io` })).status === 200
+    && mailsTo(`${user}@test.io`, /Subject: Your AskIndia User ID/).at(-1)?.includes(user));
+}
+
+// ── ACCOUNTS: every login type, checked down to the stored row ─────────────
+if (PHASE === 'accounts') {
+  section('ACCOUNT CREATION AND LOGIN');
+  const admin = await login('admin@test.io', 'AdminPass123');
+  check('existing admin email login', admin.status === 200 && admin.data.user.role === 'admin', admin.error);
+  const ADMIN = admin.data.accessToken;
+  const email = `fresh.${RUN}@test.io`;
+  const su = await call('POST', '/auth/signup', { email, password: 'FreshPass123', name: 'Fresh', role: 'customer' });
+  check('new customer account is created', su.status === 201, su.error);
+  check('new account row: bcrypt hash, active, customer', sql(`select (password_hash like '$2%')::text||':'||is_active||':'||role from profiles where email='${email}'`) === 'true:true:customer');
+  const fresh = await login(email, 'FreshPass123');
+  check('new account email login', fresh.status === 200 && fresh.data.user.role === 'customer', fresh.error);
+  const agent = await call('POST', '/auth/signup', { email: `agent.${RUN}@test.io`, password: 'AgentPass123', name: 'Agent', role: 'agent' }, ADMIN);
+  check('admin-created account email login', agent.status === 201 && (await login(`agent.${RUN}@test.io`, 'AgentPass123')).status === 200, agent.error);
+  for (const [type, role] of [['product', 'store_owner'], ['service', 'service_provider']]) {
+    const username = `${type}_${RUN}`;
+    const st = await call('POST', '/stores', {
+      name: `Store ${username}`, slug: `${type}-${RUN}`, city: 'Pune', storeType: type,
+      ownerAccount: { name: 'Owner', email: `${username}@test.io`, username, password: 'StorePass123' },
+    }, ADMIN);
+    check(`admin creates ${type} store with login`, st.status === 201, st.error);
+    check(`${type} login row: username, bcrypt, role, store_id`, sql(
+      `select username||':'||(password_hash like '$2%')::text||':'||role||':'||store_id from profiles where email='${username}@test.io'`,
+    ) === `${username}:true:${role}:${st.data?.id}`);
+    const r = await login(username, 'StorePass123');
+    check(`${role} User ID login`, r.status === 200 && r.data.user.role === role && r.data.user.storeId === st.data?.id, r.error);
+    check(`${role} cannot call admin APIs`, (await call('GET', '/admin/users', undefined, r.data?.accessToken)).status === 403);
+  }
+  check('admin store_id untouched', sql(`select coalesce(store_id::text,'') from profiles where email='admin@test.io'`) === '');
+  check('wrong password rejected', (await login('product_' + RUN, 'nope-nope')).status === 401);
+  check('unknown User ID rejected', (await login('ghost_' + RUN, 'StorePass123')).status === 401);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

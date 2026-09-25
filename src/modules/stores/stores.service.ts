@@ -104,7 +104,9 @@ export const storesService = {
     );
     if (!row) throw new Error('Create failed');
     const storeId = (row as Record<string, unknown>).id as string;
-    await execute('UPDATE profiles SET store_id = $1 WHERE id = $2', [storeId, payload.ownerId]);
+    // An admin creating a store without its own login is recorded as the owner,
+    // but the admin's profile must not be re-pointed at every store it creates.
+    await execute(`UPDATE profiles SET store_id = $1 WHERE id = $2 AND role <> 'admin'`, [storeId, payload.ownerId]);
     // Owner's profile now has a store_id — refresh their cached profile.
     invalidateProfileCache(payload.ownerId);
     return mapStore(row);
