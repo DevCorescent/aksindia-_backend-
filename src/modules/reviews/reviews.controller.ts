@@ -1,8 +1,9 @@
 import type { Request, Response } from 'express';
 import { reviewsService } from './reviews.service';
-import { ok, badRequest, forbidden, notFound, serverError } from '../../utils/response';
+import { ok, badRequest, forbidden, notFound, conflict, serverError } from '../../utils/response';
 
 const MAX_REVIEW_LENGTH = 2000;
+const ALREADY_REVIEWED = 'You have already reviewed this product for this order';
 
 export const reviewsController = {
   async create(req: Request, res: Response): Promise<void> {
@@ -15,11 +16,16 @@ export const reviewsController = {
         badRequest(res, 'orderId, productId (or serviceId) and rating are required'); return;
       }
       if (productId && serviceId) { badRequest(res, 'Send either productId or serviceId, not both'); return; }
+      if (typeof orderId !== 'string' || typeof (productId ?? serviceId) !== 'string') {
+        badRequest(res, 'orderId and productId (or serviceId) must be strings'); return;
+      }
       const stars = Number(rating);
       if (!Number.isInteger(stars) || stars < 1 || stars > 5) { badRequest(res, 'Rating must be a whole number between 1 and 5'); return; }
       if (reviewText !== undefined && (typeof reviewText !== 'string' || reviewText.length > MAX_REVIEW_LENGTH)) {
         badRequest(res, `Review text must be at most ${MAX_REVIEW_LENGTH} characters`); return;
       }
+      // Product reviews need a written comment; service reviews keep it optional.
+      if (productId && !reviewText?.trim()) { badRequest(res, 'Review text is required'); return; }
       if (req.user!.role !== 'customer') { forbidden(res, 'Only customers can review orders'); return; }
 
       const customerId = req.user!.id;
@@ -41,6 +47,7 @@ export const reviewsController = {
         rating: stars,
         reviewText: reviewText?.trim() ?? '',
       });
+      if (!review) { conflict(res, ALREADY_REVIEWED); return; }
       ok(res, review);
     } catch (e) {
       serverError(res, (e as Error).message);
