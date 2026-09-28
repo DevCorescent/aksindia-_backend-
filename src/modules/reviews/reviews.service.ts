@@ -89,10 +89,11 @@ export const reviewsService = {
   },
 
   /**
-   * One review per (order, product) / (order, service). Re-submitting updates
-   * the existing review rather than adding a duplicate (existing behaviour).
+   * One review per (order, product) / (order, service). A second product review
+   * is refused (returns null — the unique index decides, so concurrent requests
+   * cannot both win); re-submitting a service review updates it.
    */
-  async create(payload: Omit<Review, 'id' | 'createdAt'>): Promise<Review> {
+  async create(payload: Omit<Review, 'id' | 'createdAt'>): Promise<Review | null> {
     const row = payload.serviceId
       ? await queryOne(
         `INSERT INTO reviews (order_id, service_id, customer_id, store_id, rating, review_text)
@@ -105,12 +106,14 @@ export const reviewsService = {
       : await queryOne(
         `INSERT INTO reviews (order_id, product_id, customer_id, store_id, rating, review_text)
          VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (order_id, product_id) DO UPDATE
-           SET rating = EXCLUDED.rating, review_text = EXCLUDED.review_text
+         ON CONFLICT (order_id, product_id) DO NOTHING
          RETURNING *`,
         [payload.orderId, payload.productId, payload.customerId, payload.storeId ?? null, payload.rating, payload.reviewText ?? ''],
       );
-    if (!row) throw new Error('Failed to save review');
+    if (!row) {
+      if (payload.productId) return null;
+      throw new Error('Failed to save review');
+    }
 
     // services.rating / review_count are shown on service listings — keep them in sync.
     if (payload.serviceId) {
