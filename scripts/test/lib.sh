@@ -10,6 +10,9 @@ TEST_API_PORT="${TEST_API_PORT:-5055}"
 TEST_STATE_DIR="${TEST_STATE_DIR:-${TMPDIR:-/tmp}/askindia-test-stack}"
 export TEST_DATABASE_URL="postgres://postgres@127.0.0.1:${TEST_PG_PORT}/askindia_test"
 export TEST_API_URL="http://127.0.0.1:${TEST_API_PORT}/api/v1"
+# psql treats NUL (/dev/null) as a console on Windows and switches to the console
+# code page; the schema and migration files are UTF-8.
+export PGCLIENTENCODING=UTF8
 # Local SMTP sink (mail-sink.mjs): when running, the API mails into it.
 MAIL_SINK_PORT="${MAIL_SINK_PORT:-55025}"
 export MAIL_SINK_FILE="$TEST_STATE_DIR/mails.jsonl"
@@ -24,12 +27,34 @@ export PATH="$PG_BIN:$PATH"
 
 tpsql() { psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -q "$@"; }
 
+# Windows (Git Bash): kill/pkill reach neither the native node.exe children nor
+# the process tree, and lsof does not exist — so stop the whole Windows process
+# tree of a started process, and whatever still listens on its port.
+win_stop_tree() {  # win_stop_tree <git-bash-pid>
+  [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* ]] || return 0
+  local winpid
+  winpid="$(cat "/proc/$1/winpid" 2>/dev/null || true)"
+  [[ -n "$winpid" ]] && MSYS_NO_PATHCONV=1 taskkill /F /T /PID "$winpid" >/dev/null 2>&1 || true
+}
+win_stop_port() {  # win_stop_port <port>
+  [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* ]] || return 0
+  local pid
+  for pid in $(netstat -ano | tr -d '\r' | awk -v p=":$1" \
+      '$1 == "TCP" && $4 == "LISTENING" && substr($2, length($2) - length(p) + 1) == p { print $5 }' | sort -u); do
+    [[ $pid != 0 ]] && MSYS_NO_PATHCONV=1 taskkill /F /T /PID "$pid" >/dev/null 2>&1 || true
+  done
+}
+
 start_db() {
   stop_db
   rm -rf "$TEST_STATE_DIR"; mkdir -p "$TEST_STATE_DIR"
-  initdb -D "$TEST_STATE_DIR/pg" -U postgres --auth=trust >/dev/null
+  initdb -D "$TEST_STATE_DIR/pg" -U postgres --auth=trust -E UTF8 >/dev/null
   # TCP only: Unix socket paths under long TMPDIRs exceed the 103-byte limit.
-  pg_ctl -D "$TEST_STATE_DIR/pg" -o "-p $TEST_PG_PORT -k '' -h 127.0.0.1" -l "$TEST_STATE_DIR/pg.log" -w start >/dev/null
+  # Windows (Git Bash): pg_ctl runs postgres via cmd.exe, which passes '' through
+  # literally as a socket directory; there the default is already TCP-only.
+  PG_SOCKET_OPT="-k ''"
+  [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == cygwin* ]] && PG_SOCKET_OPT=""
+  pg_ctl -D "$TEST_STATE_DIR/pg" -o "-p $TEST_PG_PORT $PG_SOCKET_OPT -h 127.0.0.1" -l "$TEST_STATE_DIR/pg.log" -w start >/dev/null
   createdb -h 127.0.0.1 -p "$TEST_PG_PORT" -U postgres askindia_test
 }
 
@@ -57,8 +82,9 @@ start_mail_sink() {
 }
 
 stop_mail_sink() {
-  [[ -f "$TEST_STATE_DIR/mail-sink.pid" ]] && { kill "$(cat "$TEST_STATE_DIR/mail-sink.pid")" 2>/dev/null || true; rm -f "$TEST_STATE_DIR/mail-sink.pid"; }
+  [[ -f "$TEST_STATE_DIR/mail-sink.pid" ]] && { win_stop_tree "$(cat "$TEST_STATE_DIR/mail-sink.pid")"; kill "$(cat "$TEST_STATE_DIR/mail-sink.pid")" 2>/dev/null || true; rm -f "$TEST_STATE_DIR/mail-sink.pid"; }
   lsof -ti:"$MAIL_SINK_PORT" 2>/dev/null | xargs kill 2>/dev/null || true
+  win_stop_port "$MAIL_SINK_PORT"
 }
 
 # start_api [otp=false|true|<any value>|__unset__] — test-only secrets; payment
@@ -88,9 +114,11 @@ start_api() {
 
 stop_api() {
   if [[ -f "$TEST_STATE_DIR/api.pid" ]]; then
+    win_stop_tree "$(cat "$TEST_STATE_DIR/api.pid")"
     pkill -P "$(cat "$TEST_STATE_DIR/api.pid")" 2>/dev/null || true
     kill "$(cat "$TEST_STATE_DIR/api.pid")" 2>/dev/null || true
     rm -f "$TEST_STATE_DIR/api.pid"
   fi
   lsof -ti:"$TEST_API_PORT" 2>/dev/null | xargs kill 2>/dev/null || true
+  win_stop_port "$TEST_API_PORT"
 }

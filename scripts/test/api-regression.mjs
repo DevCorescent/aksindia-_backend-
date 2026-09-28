@@ -17,7 +17,8 @@ for (const url of [BASE, DB]) {
   const host = new URL(url).hostname;
   if (!['127.0.0.1', 'localhost'].includes(host)) throw new Error(`Refusing to run against non-local host ${host}`);
 }
-const sql = (q) => execFileSync('psql', [DB, '-v', 'ON_ERROR_STOP=1', '-At', '-c', q]).toString().trim();
+// psql on Windows ends lines with \r\n; drop the \r so values parse the same everywhere.
+const sql = (q) => execFileSync('psql', [DB, '-v', 'ON_ERROR_STOP=1', '-At', '-c', q]).toString().replace(/\r/g, '').trim();
 
 let pass = 0, fail = 0;
 const failures = [];
