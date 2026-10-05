@@ -133,6 +133,30 @@ export const walletsService = {
     await insertTxn(client, w.id, 'debit', amount, 'Withdrawal processed', referenceId, 'withdrawal');
   },
 
+  async adminListWallets() {
+    return query(
+      `SELECT w.id, w.user_id, w.balance, w.pending, w.total_earned, w.withdrawn, w.updated_at,
+              p.name, p.email, p.role, p.city
+       FROM wallets w
+       JOIN profiles p ON p.id = w.user_id
+       ORDER BY w.balance DESC`,
+      [],
+    );
+  },
+
+  async adminDebit(userId: string, amount: number, description: string, referenceId?: string): Promise<void> {
+    if (!(amount > 0)) throw new Error('Amount must be positive');
+    await withTransaction(async (client) => {
+      const w = await lockWallet(client, userId);
+      if (Number(w.balance) < amount) throw new Error('Insufficient wallet balance');
+      await client.query(
+        'UPDATE wallets SET balance = balance - $1, updated_at = NOW() WHERE id = $2',
+        [amount, w.id],
+      );
+      await insertTxn(client, w.id, 'debit', amount, description, referenceId ?? null, 'admin_adjustment');
+    });
+  },
+
   /** Withdrawal rejected: reverse the hold (pending → spendable balance). */
   async refund(client: PoolClient, userId: string, amount: number, referenceId: string): Promise<void> {
     const w = await lockWallet(client, userId);

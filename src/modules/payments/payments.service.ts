@@ -4,6 +4,7 @@ import { env } from '../../config/env';
 import { ordersService } from '../orders/orders.service';
 import { serviceOrdersService } from '../service-orders/service-orders.service';
 import { mapOrder } from '../../utils/mappers';
+import { walletsService } from '../wallets/wallets.service';
 
 // ── Cashfree ─────────────────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ interface CashfreeWebhookEvent {
   data: {
     order: { order_id: string; order_status: string; order_amount: number };
     payment?: { cf_payment_id: number | string; payment_status: string };
+    customer_details?: { customer_id: string; customer_name?: string; customer_email?: string };
   };
   event_time: string;
 }
@@ -79,6 +81,15 @@ export const cashfreeService = {
     const orderId = data.order?.order_id;
 
     if (!orderId) return { processed: false, message: 'No order_id in webhook payload' };
+
+    // Wallet top-up recharge — orderId starts with WLTRCG
+    if (type === 'PAYMENT_SUCCESS_WEBHOOK' && orderId.startsWith('WLTRCG')) {
+      const userId = data.customer_details?.customer_id;
+      if (!userId) return { processed: false, message: 'No customer_id in wallet recharge webhook' };
+      const amount = data.order.order_amount;
+      await walletsService.credit(userId, amount, 'Wallet top-up via Cashfree', orderId, 'recharge');
+      return { processed: true, message: `Wallet credited ₹${amount} for user ${userId}` };
+    }
 
     if (type === 'PAYMENT_SUCCESS_WEBHOOK') {
       await execute(

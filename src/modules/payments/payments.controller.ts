@@ -62,6 +62,31 @@ export const paymentsController = {
     }
   },
 
+  async cashfreeWalletRecharge(req: Request, res: Response): Promise<void> {
+    try {
+      const { amount } = req.body as { amount: number };
+      if (!amount || amount < 10) { badRequest(res, 'Minimum recharge amount is ₹10'); return; }
+
+      const userId  = req.user!.id;
+      const orderId = `WLTRCG${Date.now()}`;
+      const returnUrl = `${env.frontendUrl}/wallet/recharge-return?order_id={order_id}`;
+
+      const result = await cashfreeService.createOrder({
+        orderId,
+        amount:        Math.round(amount * 100) / 100,
+        customerId:    userId,
+        customerName:  req.user!.name ?? 'User',
+        customerEmail: req.user!.email ?? 'noreply@askindia.in',
+        customerPhone: req.user!.phone ?? '',
+        returnUrl,
+      });
+
+      ok(res, result);
+    } catch (e) {
+      serverError(res, (e as Error).message);
+    }
+  },
+
   async cashfreeWebhook(req: Request, res: Response): Promise<void> {
     try {
       const rawBody  = req.body as Buffer;

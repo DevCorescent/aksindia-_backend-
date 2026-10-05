@@ -58,7 +58,9 @@ router.get('/me',      authenticate, walletsController.getMyWallet);
  *       200: { description: Credited }
  *       403: { description: Not an admin }
  */
-router.post('/credit', authenticate, requireRole('admin'), walletsController.credit);
+router.post('/credit',     authenticate, requireRole('admin'), walletsController.credit);
+router.post('/debit',      authenticate, requireRole('admin'), walletsController.adminDebit);
+router.get('/admin/all',   authenticate, requireRole('admin'), walletsController.adminListWallets);
 
 /**
  * @openapi

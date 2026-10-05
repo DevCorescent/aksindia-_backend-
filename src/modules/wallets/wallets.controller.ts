@@ -25,4 +25,19 @@ export const walletsController = {
       created(res, { message: 'Wallet ensured' });
     } catch (e) { serverError(res, (e as Error).message); }
   },
+
+  async adminListWallets(_req: Request, res: Response): Promise<void> {
+    try {
+      const wallets = await walletsService.adminListWallets();
+      ok(res, wallets);
+    } catch (e) { serverError(res, (e as Error).message); }
+  },
+
+  async adminDebit(req: Request, res: Response): Promise<void> {
+    try {
+      const { userId, amount, description } = req.body as { userId: string; amount: number; description: string };
+      await walletsService.adminDebit(userId, amount, description);
+      ok(res, { message: 'Debited' });
+    } catch (e) { serverError(res, (e as Error).message); }
+  },
 };
