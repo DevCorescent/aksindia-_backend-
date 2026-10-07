@@ -41,6 +41,7 @@ export interface Product {
   status: 'active' | 'draft' | 'out_of_stock';
   featured: boolean;
   availableCities: string[];
+  deliveryPincodes?: string[];
   tags?: string[];
   highlights?: string[];
   specifications?: Array<{ key: string; value: string }>;
