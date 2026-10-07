@@ -71,6 +71,8 @@ export const paymentsController = {
       const orderId = `WLTRCG${Date.now()}`;
       const returnUrl = `${env.frontendUrl}/wallet/recharge-return?order_id={order_id}`;
 
+      console.log('[Wallet Recharge] Creating Cashfree order. userId:', userId, 'orderId:', orderId, 'amount:', amount);
+
       const result = await cashfreeService.createOrder({
         orderId,
         amount:        Math.round(amount * 100) / 100,
@@ -81,27 +83,37 @@ export const paymentsController = {
         returnUrl,
       });
 
+      console.log('[Wallet Recharge] Cashfree order created. cfOrderId:', result.cfOrderId, 'hasSessionId:', !!result.paymentSessionId);
       ok(res, result);
     } catch (e) {
+      console.error('[Wallet Recharge] Failed:', (e as Error).message);
       serverError(res, (e as Error).message);
     }
   },
 
   async cashfreeWebhook(req: Request, res: Response): Promise<void> {
     try {
-      const rawBody  = req.body as Buffer;
+      const rawBody   = req.body as Buffer;
       const timestamp = req.headers['x-webhook-timestamp'] as string;
       const signature = req.headers['x-webhook-signature'] as string;
 
+      console.log('[Cashfree Webhook] Received. timestamp:', timestamp, 'signature:', signature ? '***' : 'MISSING');
+      console.log('[Cashfree Webhook] Raw body:', rawBody.toString().slice(0, 500));
+
       if (timestamp && signature && !cashfreeService.verifyWebhook(rawBody, timestamp, signature)) {
+        console.log('[Cashfree Webhook] ERROR: Signature verification failed');
         badRequest(res, 'Invalid webhook signature');
         return;
       }
 
       const event = JSON.parse(rawBody.toString());
+      console.log('[Cashfree Webhook] Parsed event type:', event?.type, 'order_id:', event?.data?.order?.order_id);
+
       const result = await cashfreeService.handleWebhook(event);
+      console.log('[Cashfree Webhook] Result:', result);
       ok(res, result);
     } catch (e) {
+      console.error('[Cashfree Webhook] Exception:', (e as Error).message);
       serverError(res, (e as Error).message);
     }
   },

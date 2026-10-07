@@ -80,18 +80,47 @@ export const cashfreeService = {
     const { type, data } = event;
     const orderId = data.order?.order_id;
 
-    if (!orderId) return { processed: false, message: 'No order_id in webhook payload' };
+    console.log('[Cashfree Webhook] Received event:', JSON.stringify({ type, orderId, orderStatus: data.order?.order_status, orderAmount: data.order?.order_amount, customerId: data.customer_details?.customer_id }));
+
+    if (!orderId) {
+      console.log('[Cashfree Webhook] ERROR: No order_id in payload');
+      return { processed: false, message: 'No order_id in webhook payload' };
+    }
 
     // Wallet top-up recharge — orderId starts with WLTRCG
     if (type === 'PAYMENT_SUCCESS_WEBHOOK' && orderId.startsWith('WLTRCG')) {
       const userId = data.customer_details?.customer_id;
-      if (!userId) return { processed: false, message: 'No customer_id in wallet recharge webhook' };
+      console.log('[Cashfree Webhook] Wallet recharge event. userId:', userId, 'amount:', data.order.order_amount);
+      if (!userId) {
+        console.log('[Cashfree Webhook] ERROR: No customer_id in wallet recharge webhook');
+        return { processed: false, message: 'No customer_id in wallet recharge webhook' };
+      }
       const amount = data.order.order_amount;
-      await walletsService.credit(userId, amount, 'Wallet top-up via Cashfree', orderId, 'recharge');
-      return { processed: true, message: `Wallet credited ₹${amount} for user ${userId}` };
+
+      // Idempotency: skip if this orderId was already credited
+      const existing = await queryOne(
+        "SELECT id FROM wallet_transactions WHERE reference_id = $1 AND reference_type = 'recharge'",
+        [orderId],
+      );
+      if (existing) {
+        console.log('[Cashfree Webhook] Already credited for orderId', orderId, '— skipping duplicate');
+        return { processed: true, message: `Already credited for ${orderId}` };
+      }
+
+      try {
+        // Ensure wallet exists before crediting
+        await walletsService.ensureWallet(userId);
+        await walletsService.credit(userId, amount, 'Wallet top-up via Cashfree', orderId, 'recharge');
+        console.log('[Cashfree Webhook] SUCCESS: Credited ₹', amount, 'to user', userId);
+        return { processed: true, message: `Wallet credited ₹${amount} for user ${userId}` };
+      } catch (err) {
+        console.error('[Cashfree Webhook] FAILED to credit wallet:', (err as Error).message, 'userId:', userId, 'amount:', amount);
+        throw err;
+      }
     }
 
     if (type === 'PAYMENT_SUCCESS_WEBHOOK') {
+      console.log('[Cashfree Webhook] Order payment success for orderId:', orderId);
       await execute(
         "UPDATE orders SET payment_status = 'paid', payment_method = 'cashfree' WHERE id = $1 AND payment_status != 'paid'",
         [orderId],
@@ -104,6 +133,7 @@ export const cashfreeService = {
     }
 
     if (type === 'PAYMENT_FAILED_WEBHOOK' || type === 'PAYMENT_USER_DROPPED_WEBHOOK') {
+      console.log('[Cashfree Webhook] Payment failed/dropped for orderId:', orderId);
       await execute(
         "UPDATE orders SET payment_status = 'failed' WHERE id = $1 AND payment_status = 'pending'",
         [orderId],
@@ -111,6 +141,7 @@ export const cashfreeService = {
       return { processed: true, message: `Order ${orderId} payment failure recorded` };
     }
 
+    console.log('[Cashfree Webhook] Unhandled event type:', type);
     return { processed: false, message: `Event type ${type} not handled` };
   },
 };
