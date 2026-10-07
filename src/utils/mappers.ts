@@ -77,13 +77,14 @@ export function mapProduct(row: any): Product {
     images:          row.images       ?? [],
     status:          row.status,
     featured:        row.featured,
-    availableCities: row.available_cities ?? [],
-    tags:            row.tags         ?? [],
-    highlights:      row.highlights   ?? [],
-    specifications:  row.specifications ?? [],
-    warranty:        row.warranty     ?? undefined,
-    returnPolicy:    row.return_policy ?? undefined,
-    createdAt:       toDateStr(row.created_at),
+    availableCities:  row.available_cities  ?? [],
+    deliveryPincodes: row.delivery_pincodes ?? [],
+    tags:             row.tags              ?? [],
+    highlights:       row.highlights        ?? [],
+    specifications:   row.specifications    ?? [],
+    warranty:         row.warranty          ?? undefined,
+    returnPolicy:     row.return_policy     ?? undefined,
+    createdAt:        toDateStr(row.created_at),
   };
 }
 

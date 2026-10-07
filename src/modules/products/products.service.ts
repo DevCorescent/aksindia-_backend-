@@ -18,7 +18,8 @@ function buildUpdate(patch: Partial<Product>): { fields: string[]; values: unkno
   if (patch.imageIcon       !== undefined) { fields.push(`image_icon = $${i++}`);       values.push(patch.imageIcon); }
   if (patch.thumbnail       !== undefined) { fields.push(`thumbnail = $${i++}`);        values.push(patch.thumbnail); }
   if (patch.images          !== undefined) { fields.push(`images = $${i++}`);           values.push(patch.images); }
-  if (patch.availableCities !== undefined) { fields.push(`available_cities = $${i++}`); values.push(patch.availableCities); }
+  if (patch.availableCities   !== undefined) { fields.push(`available_cities = $${i++}`);   values.push(patch.availableCities); }
+  if (patch.deliveryPincodes  !== undefined) { fields.push(`delivery_pincodes = $${i++}`); values.push(patch.deliveryPincodes); }
   if (patch.tags            !== undefined) { fields.push(`tags = $${i++}`);             values.push(patch.tags); }
   if (patch.highlights      !== undefined) { fields.push(`highlights = $${i++}`);       values.push(patch.highlights); }
   if (patch.specifications  !== undefined) { fields.push(`specifications = $${i++}`);   values.push(JSON.stringify(patch.specifications)); }
@@ -97,9 +98,9 @@ export const productsService = {
     const row = await queryOne(
       `INSERT INTO products
         (store_id, name, description, price, mrp, commission, category_id, category, brand,
-         stock, image_color, image_icon, thumbnail, images, status, featured, available_cities, tags,
-         highlights, specifications, warranty, return_policy)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+         stock, image_color, image_icon, thumbnail, images, status, featured, available_cities,
+         delivery_pincodes, tags, highlights, specifications, warranty, return_policy)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
        RETURNING *`,
       // Every NOT NULL column is defaulted here. An undefined parameter reaches
       // Postgres as NULL, which overrides the column DEFAULT rather than falling
@@ -111,6 +112,7 @@ export const productsService = {
         rest.imageColor ?? '#6366f1', rest.imageIcon ?? '📦',
         rest.thumbnail ?? null, rest.images ?? [],
         rest.status ?? 'draft', rest.featured ?? false, rest.availableCities ?? [],
+        rest.deliveryPincodes ?? [],
         rest.tags ?? [], rest.highlights ?? [],
         JSON.stringify(rest.specifications ?? []),
         rest.warranty ?? '', rest.returnPolicy ?? '',
