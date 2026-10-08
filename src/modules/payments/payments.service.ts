@@ -29,6 +29,26 @@ interface CashfreeWebhookEvent {
 }
 
 export const cashfreeService = {
+  async getOrderStatus(orderId: string): Promise<{ orderStatus: string; orderAmount: number }> {
+    const baseUrl = env.cashfreeEnv === 'production'
+      ? 'https://api.cashfree.com'
+      : 'https://sandbox.cashfree.com';
+
+    const res = await fetch(`${baseUrl}/pg/orders/${encodeURIComponent(orderId)}`, {
+      headers: {
+        'x-client-id':     env.cashfreeAppId,
+        'x-client-secret': env.cashfreeSecretKey,
+        'x-api-version':   '2023-08-01',
+      },
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(`Cashfree get order failed (${res.status}): ${txt}`);
+    }
+    const data = await res.json() as { order_status: string; order_amount: number };
+    return { orderStatus: data.order_status, orderAmount: data.order_amount };
+  },
+
   async createOrder(params: CashfreeOrderParams): Promise<{ paymentSessionId: string; cfOrderId: string }> {
     const baseUrl = env.cashfreeEnv === 'production'
       ? 'https://api.cashfree.com'

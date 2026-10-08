@@ -69,7 +69,8 @@ export const paymentsController = {
 
       const userId  = req.user!.id;
       const orderId = `WLTRCG${Date.now()}`;
-      const returnUrl = `${env.frontendUrl}/wallet/recharge-return?order_id={order_id}&order_status={order_status}`;
+      // {order_id} is the only Cashfree-supported template variable in return_url
+      const returnUrl = `${env.frontendUrl}/wallet/recharge-return?order_id={order_id}`;
 
       console.log('[Wallet Recharge] Creating Cashfree order. userId:', userId, 'orderId:', orderId, 'amount:', amount);
 
@@ -87,6 +88,17 @@ export const paymentsController = {
       ok(res, result);
     } catch (e) {
       console.error('[Wallet Recharge] Failed:', (e as Error).message);
+      serverError(res, (e as Error).message);
+    }
+  },
+
+  async cashfreeGetOrderStatus(req: Request, res: Response): Promise<void> {
+    try {
+      const { orderId } = req.params;
+      if (!orderId) { badRequest(res, 'orderId is required'); return; }
+      const result = await cashfreeService.getOrderStatus(orderId);
+      ok(res, result);
+    } catch (e) {
       serverError(res, (e as Error).message);
     }
   },

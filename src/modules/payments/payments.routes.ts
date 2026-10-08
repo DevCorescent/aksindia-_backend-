@@ -64,8 +64,9 @@ router.post('/webhook',              paymentsController.webhook);
 router.get('/intent/:orderId',       authenticate, paymentsController.getOrderIntent);
 
 // Cashfree — raw body for webhook applied in app.ts
-router.post('/cashfree/order',           authenticate, paymentsController.cashfreeCreateOrder);
-router.post('/cashfree/wallet-recharge', authenticate, paymentsController.cashfreeWalletRecharge);
-router.post('/cashfree/webhook',         paymentsController.cashfreeWebhook);
+router.post('/cashfree/order',                authenticate, paymentsController.cashfreeCreateOrder);
+router.post('/cashfree/wallet-recharge',      authenticate, paymentsController.cashfreeWalletRecharge);
+router.get('/cashfree/order-status/:orderId', authenticate, paymentsController.cashfreeGetOrderStatus);
+router.post('/cashfree/webhook',              paymentsController.cashfreeWebhook);
 
 export default router;
