@@ -69,7 +69,7 @@ export const paymentsController = {
 
       const userId  = req.user!.id;
       const orderId = `WLTRCG${Date.now()}`;
-      const returnUrl = `${env.frontendUrl}/wallet/recharge-return?order_id={order_id}`;
+      const returnUrl = `${env.frontendUrl}/wallet/recharge-return?order_id={order_id}&order_status={order_status}`;
 
       console.log('[Wallet Recharge] Creating Cashfree order. userId:', userId, 'orderId:', orderId, 'amount:', amount);
 

@@ -7,7 +7,8 @@ export const walletsController = {
     try {
       const wallet = await walletsService.getWallet(req.user!.id);
       const transactions = await walletsService.getTransactions(wallet.id);
-      ok(res, { wallet, transactions });
+      // Spread wallet fields to top level so frontend can read balance, total_earned etc. directly
+      ok(res, { ...wallet, transactions });
     } catch (e) { serverError(res, (e as Error).message); }
   },
 
