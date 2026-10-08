@@ -3,22 +3,30 @@ import { paymentsService, verifyRazorpaySignature, cashfreeService } from './pay
 import { ok, badRequest, serverError } from '../../utils/response';
 import { queryOne } from '../../config/db';
 import { env } from '../../config/env';
+import { logger } from '../../utils/logger';
+
+const TAG = 'PaymentsCtrl';
 
 export const paymentsController = {
   async webhook(req: Request, res: Response): Promise<void> {
     try {
       const signature = req.headers['x-razorpay-signature'] as string;
       const rawBody = req.body as Buffer;
+      logger.info(TAG, 'Razorpay webhook received', { hasSignature: !!signature });
 
       if (signature && !verifyRazorpaySignature(rawBody, signature)) {
+        logger.error(TAG, 'Razorpay webhook: invalid signature');
         badRequest(res, 'Invalid webhook signature');
         return;
       }
 
       const event = JSON.parse(rawBody.toString());
+      logger.info(TAG, 'Razorpay webhook: processing', { eventType: event?.event });
       const result = await paymentsService.handleWebhook(event);
+      logger.info(TAG, 'Razorpay webhook: done', { result });
       ok(res, result);
     } catch (e) {
+      logger.error(TAG, 'Razorpay webhook: exception', { error: (e as Error).message });
       serverError(res, (e as Error).message);
     }
   },
@@ -37,6 +45,7 @@ export const paymentsController = {
       const { orderId } = req.body as { orderId: string };
       if (!orderId) { badRequest(res, 'orderId is required'); return; }
 
+      logger.info(TAG, 'cashfreeCreateOrder: lookup order', { orderId });
       const row = await queryOne(
         'SELECT id, total, customer_name, customer_email, customer_id FROM orders WHERE id = $1',
         [orderId],
@@ -45,6 +54,7 @@ export const paymentsController = {
       const r = row as Record<string, unknown>;
 
       const returnUrl = `${env.frontendUrl}/shop/checkout/payment-return?order_id={order_id}`;
+      logger.info(TAG, 'cashfreeCreateOrder: creating Cashfree order', { orderId, total: r.total, returnUrl });
 
       const result = await cashfreeService.createOrder({
         orderId,
@@ -56,8 +66,10 @@ export const paymentsController = {
         returnUrl,
       });
 
+      logger.info(TAG, 'cashfreeCreateOrder: success', { orderId, cfOrderId: result.cfOrderId });
       ok(res, result);
     } catch (e) {
+      logger.error(TAG, 'cashfreeCreateOrder: failed', { error: (e as Error).message });
       serverError(res, (e as Error).message);
     }
   },
@@ -72,7 +84,7 @@ export const paymentsController = {
       // {order_id} is the only Cashfree-supported template variable in return_url
       const returnUrl = `${env.frontendUrl}/wallet/recharge-return?order_id={order_id}`;
 
-      console.log('[Wallet Recharge] Creating Cashfree order. userId:', userId, 'orderId:', orderId, 'amount:', amount);
+      logger.info(TAG, 'cashfreeWalletRecharge: creating order', { userId, orderId, amount, returnUrl });
 
       const result = await cashfreeService.createOrder({
         orderId,
@@ -84,10 +96,10 @@ export const paymentsController = {
         returnUrl,
       });
 
-      console.log('[Wallet Recharge] Cashfree order created. cfOrderId:', result.cfOrderId, 'hasSessionId:', !!result.paymentSessionId);
+      logger.info(TAG, 'cashfreeWalletRecharge: Cashfree order created', { orderId, cfOrderId: result.cfOrderId, hasSessionId: !!result.paymentSessionId });
       ok(res, result);
     } catch (e) {
-      console.error('[Wallet Recharge] Failed:', (e as Error).message);
+      logger.error(TAG, 'cashfreeWalletRecharge: failed', { error: (e as Error).message, stack: (e as Error).stack });
       serverError(res, (e as Error).message);
     }
   },
@@ -96,9 +108,12 @@ export const paymentsController = {
     try {
       const { orderId } = req.params;
       if (!orderId) { badRequest(res, 'orderId is required'); return; }
+      logger.info(TAG, 'cashfreeGetOrderStatus: checking', { orderId });
       const result = await cashfreeService.getOrderStatus(orderId);
+      logger.info(TAG, 'cashfreeGetOrderStatus: result', { orderId, ...result });
       ok(res, result);
     } catch (e) {
+      logger.error(TAG, 'cashfreeGetOrderStatus: failed', { orderId: req.params.orderId, error: (e as Error).message });
       serverError(res, (e as Error).message);
     }
   },
@@ -108,24 +123,46 @@ export const paymentsController = {
       const rawBody   = req.body as Buffer;
       const timestamp = req.headers['x-webhook-timestamp'] as string;
       const signature = req.headers['x-webhook-signature'] as string;
+      const version   = req.headers['x-webhook-version'] as string;
+      const attempt   = req.headers['x-webhook-attempt'] as string;
 
-      console.log('[Cashfree Webhook] Received. timestamp:', timestamp, 'signature:', signature ? '***' : 'MISSING');
-      console.log('[Cashfree Webhook] Raw body:', rawBody.toString().slice(0, 500));
+      logger.info(TAG, 'cashfreeWebhook: received', {
+        hasTimestamp: !!timestamp,
+        hasSignature: !!signature,
+        version,
+        attempt,
+        bodyLength: rawBody?.length,
+      });
+
+      // Log raw body (first 800 chars so we see the full payload without flooding logs)
+      const rawStr = rawBody?.toString() ?? '';
+      logger.debug(TAG, 'cashfreeWebhook: raw body', { body: rawStr.slice(0, 800) });
 
       if (timestamp && signature && !cashfreeService.verifyWebhook(rawBody, timestamp, signature)) {
-        console.log('[Cashfree Webhook] ERROR: Signature verification failed');
+        logger.error(TAG, 'cashfreeWebhook: SIGNATURE INVALID — rejecting');
         badRequest(res, 'Invalid webhook signature');
         return;
       }
 
-      const event = JSON.parse(rawBody.toString());
-      console.log('[Cashfree Webhook] Parsed event type:', event?.type, 'order_id:', event?.data?.order?.order_id);
+      let event: Record<string, unknown>;
+      try {
+        event = JSON.parse(rawStr);
+      } catch (parseErr) {
+        logger.error(TAG, 'cashfreeWebhook: failed to parse JSON body', { error: (parseErr as Error).message, raw: rawStr.slice(0, 200) });
+        badRequest(res, 'Invalid JSON body');
+        return;
+      }
 
-      const result = await cashfreeService.handleWebhook(event);
-      console.log('[Cashfree Webhook] Result:', result);
+      logger.info(TAG, 'cashfreeWebhook: parsed', {
+        type: event?.type,
+        orderId: (event?.data as Record<string, unknown>)?.['order']?.['order_id'],
+      });
+
+      const result = await cashfreeService.handleWebhook(event as Parameters<typeof cashfreeService.handleWebhook>[0]);
+      logger.info(TAG, 'cashfreeWebhook: handled', { result });
       ok(res, result);
     } catch (e) {
-      console.error('[Cashfree Webhook] Exception:', (e as Error).message);
+      logger.error(TAG, 'cashfreeWebhook: EXCEPTION', { error: (e as Error).message, stack: (e as Error).stack });
       serverError(res, (e as Error).message);
     }
   },

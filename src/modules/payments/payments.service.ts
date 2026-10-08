@@ -5,6 +5,9 @@ import { ordersService } from '../orders/orders.service';
 import { serviceOrdersService } from '../service-orders/service-orders.service';
 import { mapOrder } from '../../utils/mappers';
 import { walletsService } from '../wallets/wallets.service';
+import { logger } from '../../utils/logger';
+
+const TAG = 'Payments';
 
 // ── Cashfree ─────────────────────────────────────────────────────────────────
 
@@ -34,6 +37,8 @@ export const cashfreeService = {
       ? 'https://api.cashfree.com'
       : 'https://sandbox.cashfree.com';
 
+    logger.info(TAG, 'getOrderStatus: calling Cashfree', { orderId, env: env.cashfreeEnv, baseUrl });
+
     const res = await fetch(`${baseUrl}/pg/orders/${encodeURIComponent(orderId)}`, {
       headers: {
         'x-client-id':     env.cashfreeAppId,
@@ -41,11 +46,16 @@ export const cashfreeService = {
         'x-api-version':   '2023-08-01',
       },
     });
+
+    logger.info(TAG, 'getOrderStatus: Cashfree responded', { orderId, httpStatus: res.status });
+
     if (!res.ok) {
       const txt = await res.text();
+      logger.error(TAG, 'getOrderStatus: Cashfree error', { orderId, httpStatus: res.status, body: txt });
       throw new Error(`Cashfree get order failed (${res.status}): ${txt}`);
     }
     const data = await res.json() as { order_status: string; order_amount: number };
+    logger.info(TAG, 'getOrderStatus: result', { orderId, orderStatus: data.order_status, orderAmount: data.order_amount });
     return { orderStatus: data.order_status, orderAmount: data.order_amount };
   },
 
@@ -53,6 +63,14 @@ export const cashfreeService = {
     const baseUrl = env.cashfreeEnv === 'production'
       ? 'https://api.cashfree.com'
       : 'https://sandbox.cashfree.com';
+
+    logger.info(TAG, 'createOrder: calling Cashfree', {
+      orderId: params.orderId,
+      amount: params.amount,
+      customerId: params.customerId,
+      returnUrl: params.returnUrl,
+      env: env.cashfreeEnv,
+    });
 
     const res = await fetch(`${baseUrl}/pg/orders`, {
       method: 'POST',
@@ -78,82 +96,114 @@ export const cashfreeService = {
       }),
     });
 
+    logger.info(TAG, 'createOrder: Cashfree responded', { orderId: params.orderId, httpStatus: res.status });
+
     if (!res.ok) {
       const errText = await res.text();
+      logger.error(TAG, 'createOrder: Cashfree error', { orderId: params.orderId, httpStatus: res.status, body: errText });
       throw new Error(`Cashfree order creation failed (${res.status}): ${errText}`);
     }
 
     const data = await res.json() as { cf_order_id: string; payment_session_id: string };
+    logger.info(TAG, 'createOrder: SUCCESS', { orderId: params.orderId, cfOrderId: data.cf_order_id, hasSessionId: !!data.payment_session_id });
     return { paymentSessionId: data.payment_session_id, cfOrderId: data.cf_order_id };
   },
 
   verifyWebhook(rawBody: Buffer, timestamp: string, signature: string): boolean {
-    if (!env.cashfreeWebhookSecret) return true;
+    if (!env.cashfreeWebhookSecret) {
+      logger.warn(TAG, 'verifyWebhook: CASHFREE_WEBHOOK_SECRET not set — skipping verification');
+      return true;
+    }
     const payload = timestamp + '\n' + rawBody.toString();
     const expected = createHmac('sha256', env.cashfreeWebhookSecret)
       .update(payload)
       .digest('base64');
-    return expected === signature;
+    const valid = expected === signature;
+    if (!valid) {
+      logger.error(TAG, 'verifyWebhook: SIGNATURE MISMATCH', { timestamp, signatureReceived: signature, signatureExpected: expected });
+    } else {
+      logger.debug(TAG, 'verifyWebhook: signature OK');
+    }
+    return valid;
   },
 
   async handleWebhook(event: CashfreeWebhookEvent): Promise<{ processed: boolean; message: string }> {
     const { type, data } = event;
-    const orderId = data.order?.order_id;
+    const orderId      = data.order?.order_id;
+    const orderAmount  = data.order?.order_amount;
+    const orderStatus  = data.order?.order_status;
+    const customerId   = data.customer_details?.customer_id;
+    const paymentId    = data.payment?.cf_payment_id;
+    const paymentStatus = data.payment?.payment_status;
 
-    console.log('[Cashfree Webhook] Received event:', JSON.stringify({ type, orderId, orderStatus: data.order?.order_status, orderAmount: data.order?.order_amount, customerId: data.customer_details?.customer_id }));
+    logger.info(TAG, 'handleWebhook: received', { type, orderId, orderAmount, orderStatus, customerId, paymentId, paymentStatus });
 
     if (!orderId) {
-      console.log('[Cashfree Webhook] ERROR: No order_id in payload');
+      logger.error(TAG, 'handleWebhook: missing order_id in payload — rejecting');
       return { processed: false, message: 'No order_id in webhook payload' };
     }
 
-    // Wallet top-up recharge — orderId starts with WLTRCG
+    // ── Wallet recharge ──────────────────────────────────────────────────────
     if (type === 'PAYMENT_SUCCESS_WEBHOOK' && orderId.startsWith('WLTRCG')) {
-      const userId = data.customer_details?.customer_id;
-      console.log('[Cashfree Webhook] Wallet recharge event. userId:', userId, 'amount:', data.order.order_amount);
-      if (!userId) {
-        console.log('[Cashfree Webhook] ERROR: No customer_id in wallet recharge webhook');
+      logger.info(TAG, 'handleWebhook: wallet recharge path', { orderId, customerId, orderAmount });
+
+      if (!customerId) {
+        logger.error(TAG, 'handleWebhook: wallet recharge missing customer_id', { orderId });
         return { processed: false, message: 'No customer_id in wallet recharge webhook' };
       }
-      const amount = data.order.order_amount;
 
       // Idempotency: skip if this orderId was already credited
+      logger.debug(TAG, 'handleWebhook: checking idempotency', { orderId });
       const existing = await queryOne(
         "SELECT id FROM wallet_transactions WHERE reference_id = $1 AND reference_type = 'recharge'",
         [orderId],
       );
       if (existing) {
-        console.log('[Cashfree Webhook] Already credited for orderId', orderId, '— skipping duplicate');
+        logger.warn(TAG, 'handleWebhook: duplicate webhook — already credited, skipping', { orderId });
         return { processed: true, message: `Already credited for ${orderId}` };
       }
+      logger.debug(TAG, 'handleWebhook: idempotency OK — no prior credit found', { orderId });
 
       try {
-        // Ensure wallet exists before crediting
-        await walletsService.ensureWallet(userId);
-        await walletsService.credit(userId, amount, 'Wallet top-up via Cashfree', orderId, 'recharge');
-        console.log('[Cashfree Webhook] SUCCESS: Credited ₹', amount, 'to user', userId);
-        return { processed: true, message: `Wallet credited ₹${amount} for user ${userId}` };
+        logger.info(TAG, 'handleWebhook: ensuring wallet exists', { userId: customerId });
+        await walletsService.ensureWallet(customerId);
+
+        logger.info(TAG, 'handleWebhook: crediting wallet', { userId: customerId, amount: orderAmount });
+        await walletsService.credit(customerId, orderAmount, 'Wallet top-up via Cashfree', orderId, 'recharge');
+
+        logger.info(TAG, 'handleWebhook: wallet credit SUCCESS', { userId: customerId, amount: orderAmount, orderId });
+        return { processed: true, message: `Wallet credited ₹${orderAmount} for user ${customerId}` };
       } catch (err) {
-        console.error('[Cashfree Webhook] FAILED to credit wallet:', (err as Error).message, 'userId:', userId, 'amount:', amount);
+        logger.error(TAG, 'handleWebhook: wallet credit FAILED', {
+          userId: customerId,
+          amount: orderAmount,
+          orderId,
+          error: (err as Error).message,
+          stack: (err as Error).stack,
+        });
         throw err;
       }
     }
 
+    // ── Order payment success ─────────────────────────────────────────────────
     if (type === 'PAYMENT_SUCCESS_WEBHOOK') {
-      console.log('[Cashfree Webhook] Order payment success for orderId:', orderId);
+      logger.info(TAG, 'handleWebhook: order payment success', { orderId });
       await execute(
         "UPDATE orders SET payment_status = 'paid', payment_method = 'cashfree' WHERE id = $1 AND payment_status != 'paid'",
         [orderId],
       );
       const row = await queryOne('SELECT status FROM orders WHERE id = $1', [orderId]);
       if (row && (row as Record<string, unknown>).status === 'delivered') {
+        logger.info(TAG, 'handleWebhook: order already delivered — triggering wallet credit', { orderId });
         await ordersService.update(orderId, { paymentStatus: 'paid' });
       }
+      logger.info(TAG, 'handleWebhook: order marked paid', { orderId });
       return { processed: true, message: `Order ${orderId} marked paid via Cashfree` };
     }
 
+    // ── Payment failure ───────────────────────────────────────────────────────
     if (type === 'PAYMENT_FAILED_WEBHOOK' || type === 'PAYMENT_USER_DROPPED_WEBHOOK') {
-      console.log('[Cashfree Webhook] Payment failed/dropped for orderId:', orderId);
+      logger.warn(TAG, 'handleWebhook: payment failed/dropped', { orderId, type });
       await execute(
         "UPDATE orders SET payment_status = 'failed' WHERE id = $1 AND payment_status = 'pending'",
         [orderId],
@@ -161,7 +211,7 @@ export const cashfreeService = {
       return { processed: true, message: `Order ${orderId} payment failure recorded` };
     }
 
-    console.log('[Cashfree Webhook] Unhandled event type:', type);
+    logger.warn(TAG, 'handleWebhook: unhandled event type', { type, orderId });
     return { processed: false, message: `Event type ${type} not handled` };
   },
 };
