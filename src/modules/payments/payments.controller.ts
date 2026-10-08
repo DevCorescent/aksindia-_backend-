@@ -155,10 +155,10 @@ export const paymentsController = {
 
       logger.info(TAG, 'cashfreeWebhook: parsed', {
         type: event?.type,
-        orderId: (event?.data as Record<string, unknown>)?.['order']?.['order_id'],
+        orderId: (event?.data as Record<string, Record<string, unknown>> | undefined)?.['order']?.['order_id'],
       });
 
-      const result = await cashfreeService.handleWebhook(event as Parameters<typeof cashfreeService.handleWebhook>[0]);
+      const result = await cashfreeService.handleWebhook(event as unknown as Parameters<typeof cashfreeService.handleWebhook>[0]);
       logger.info(TAG, 'cashfreeWebhook: handled', { result });
       ok(res, result);
     } catch (e) {
