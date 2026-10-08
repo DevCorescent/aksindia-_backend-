@@ -166,6 +166,40 @@ export const walletsService = {
     );
   },
 
+  /** User pays for their own order — debits caller's wallet, not admin-only. */
+  async debitSelf(
+    userId: string,
+    amount: number,
+    description: string,
+    referenceId?: string,
+  ): Promise<void> {
+    logger.info(TAG, 'debitSelf START', { userId, amount, description, referenceId });
+
+    if (!(amount > 0)) {
+      logger.error(TAG, 'debitSelf REJECTED: amount must be positive', { userId, amount });
+      throw new Error('Amount must be positive');
+    }
+
+    await withTransaction(async (client) => {
+      const w = await lockWallet(client, userId);
+      logger.info(TAG, 'debitSelf: wallet locked', { walletId: w.id, balanceBefore: w.balance });
+
+      if (Number(w.balance) < amount) {
+        logger.error(TAG, 'debitSelf REJECTED: insufficient balance', { userId, balance: w.balance, requested: amount });
+        throw new Error(`Insufficient wallet balance. Available: ₹${w.balance}, required: ₹${amount}`);
+      }
+
+      await client.query(
+        'UPDATE wallets SET balance = balance - $1, updated_at = NOW() WHERE id = $2',
+        [amount, w.id],
+      );
+      await insertTxn(client, w.id, 'debit', amount, description, referenceId ?? null, 'order');
+      logger.info(TAG, 'debitSelf: row updated + txn inserted', { walletId: w.id, debited: amount, referenceId });
+    });
+
+    logger.info(TAG, 'debitSelf COMMITTED', { userId, amount });
+  },
+
   async adminDebit(userId: string, amount: number, description: string, referenceId?: string): Promise<void> {
     logger.info(TAG, 'adminDebit START', { userId, amount, description, referenceId });
 
