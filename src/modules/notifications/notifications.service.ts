@@ -34,6 +34,14 @@ export const notificationsService = {
     );
   },
 
+  async broadcastToRole(role: string, payload: Omit<Notification, 'id' | 'createdAt' | 'read' | 'userId'>): Promise<void> {
+    await execute(
+      `INSERT INTO notifications (user_id, type, title, message, link)
+       SELECT id, $1, $2, $3, $4 FROM profiles WHERE role = $5`,
+      [payload.type, payload.title, payload.message, payload.link ?? null, role],
+    );
+  },
+
   async markRead(id: string): Promise<void> {
     await execute('UPDATE notifications SET read = true WHERE id = $1', [id]);
   },

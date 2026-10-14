@@ -103,7 +103,8 @@ router.post('/',               authenticate, requireRole('admin'), notifications
  *       401: { description: Missing/invalid token }
  *       403: { description: Not an admin }
  */
-router.post('/broadcast',      authenticate, requireRole('admin'), notificationsController.broadcast);
+router.post('/broadcast',           authenticate, requireRole('admin'), notificationsController.broadcast);
+router.post('/broadcast-role',      authenticate, requireRole('admin'), notificationsController.broadcastToRole);
 /**
  * @openapi
  * /notifications/{id}/read:

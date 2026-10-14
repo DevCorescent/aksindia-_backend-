@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import type { Notification } from '../../types';
 import { notificationsService } from './notifications.service';
 import { ok, created, noContent, serverError } from '../../utils/response';
 
@@ -21,6 +22,14 @@ export const notificationsController = {
     try {
       await notificationsService.broadcast(req.body);
       created(res, { message: 'Broadcast sent to all users' });
+    } catch (e) { serverError(res, (e as Error).message); }
+  },
+  async broadcastToRole(req: Request, res: Response): Promise<void> {
+    try {
+      const { role, ...payload } = req.body as { role: string; type: Notification['type']; title: string; message: string; link?: string };
+      if (!role) { ok(res, { message: 'role is required' }); return; }
+      await notificationsService.broadcastToRole(role, payload);
+      created(res, { message: `Broadcast sent to role: ${role}` });
     } catch (e) { serverError(res, (e as Error).message); }
   },
   async markRead(req: Request, res: Response): Promise<void> {
